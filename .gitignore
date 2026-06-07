@@ -1,0 +1,47 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ===== 가상환경 =====
+.venv/
+venv/
+env/
+ENV/
+
+# ===== 데이터셋 (용량 큼 — 깃에 올리지 않음) =====
+data/
+datasets/
+UrbanSound8K/
+*.wav
+*.mp3
+*.flac
+*.ogg
+# (단, 테스트용 소수 샘플을 올리고 싶으면 samples/ 만들어 예외 처리)
+
+# ===== 학습 산출물 (모델/체크포인트) =====
+checkpoints/
+runs/
+outputs/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.tflite
+*.onnx
+*.pb
+
+# ===== 노트북 / 캐시 =====
+.ipynb_checkpoints/
+*.log
+
+# ===== IDE / OS =====
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
