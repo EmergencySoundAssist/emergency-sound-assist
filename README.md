@@ -45,6 +45,38 @@ docs/         설계 문서  → docs/README.md
 
 ---
 
+## 실행 방법 (classifier)
+
+### 1. 환경 준비
+```bash
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # (cmd: .venv\Scripts\activate.bat)
+pip install -r requirements.txt
+```
+> Python 3.13에서 전역 TF가 안 깔리면 venv 안에서 설치하세요. (TF 2.21+ 필요)
+
+### 2. 데이터 준비 (UrbanSound8K)
+1. [Kaggle](https://www.kaggle.com/datasets/chrisfilo/urbansound8k) 또는 [Zenodo](https://zenodo.org/records/1203745)에서 다운로드
+2. 압축 해제 후 아래 구조로 `data/`에 배치:
+   ```
+   data/UrbanSound8K/metadata/UrbanSound8K.csv
+   data/UrbanSound8K/audio/fold1 ... fold10/
+   ```
+
+### 3. 학습 / 평가 / 실행
+```bash
+python -m classifier.train --smoke      # 빠른 검증(2 epoch, 소수 샘플)
+python -m classifier.train              # 본학습 (전체, 5개 실험)
+python -m classifier.evaluate           # test(fold10) 비교 표 → outputs/comparison.md
+python -m pipeline.run --wav <파일>     # 통합 데모 ("사이렌, 방향 미상, 이동 미상")
+python -m pipeline.run --mic            # 마이크 실시간
+```
+> 한글 출력이 깨지면 `set PYTHONUTF8=1` (또는 `$env:PYTHONUTF8=1`) 후 실행.
+
+### 모델 실험 (5개, 전체학습 비교)
+`scratch_cnn`(베이스라인) / `yamnet_frozen_{linear,mlp}` / `mobilenet_finetune_{linear,mlp}`
+→ 자세히: [docs/classifier/design.md](docs/classifier/design.md)
+
 ## 문서
 설계 문서는 [`docs/`](docs/README.md) 참고:
 - [전체 구조](docs/architecture.md) · [데이터 인터페이스](docs/interfaces.md) · [하드웨어](docs/hardware.md) · [용어집](docs/glossary.md)

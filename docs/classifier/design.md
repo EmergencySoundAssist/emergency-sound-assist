@@ -46,6 +46,8 @@
   - MobileNet 입력용: (1,64,~32) 1채널 → **3채널 복제**
 - YAMNet은 자체 전처리(16kHz 파형 그대로 입력 → 내부에서 mel/임베딩 생성)
 
+> 📖 단계별 자세한 설명(실제 예시 포함): [preprocessing.md](preprocessing.md)
+
 ---
 
 ## 4. 모델 실험 — 전체학습 비교 (시작점 × head)
@@ -57,13 +59,16 @@
 
 ### 활성 실험 5개
 
-| 이름 | 시작점 | head | 역할 |
-|------|--------|------|------|
-| `scratch_cnn` | 랜덤 | (단순) | **베이스라인** |
-| `yamnet_finetune_linear` | YAMNet | linear | |
-| `yamnet_finetune_mlp` | YAMNet | mlp | |
-| `mobilenet_finetune_linear` | MobileNet | linear | |
-| `mobilenet_finetune_mlp` | MobileNet | mlp | |
+| 이름 | 시작점 | head | 학습 | 역할 |
+|------|--------|------|------|------|
+| `scratch_cnn` | 랜덤 | mlp | 전체 | **베이스라인** |
+| `yamnet_frozen_linear` | YAMNet | linear | head만(동결) | |
+| `yamnet_frozen_mlp` | YAMNet | mlp | head만(동결) | |
+| `mobilenet_finetune_linear` | MobileNet | linear | 전체 | |
+| `mobilenet_finetune_mlp` | MobileNet | mlp | 전체 | |
+
+> ⚠️ YAMNet은 tfhub 구조상 전체 finetune이 어려워 **frozen(동결)+head** 로 구현.
+> YAMNet(TF)으로 1024 임베딩을 뽑고(동결), 그 위에 torch head만 학습. (scratch/MobileNet은 전체학습)
 
 ### 비교로 알고 싶은 것
 - **scratch ↔ pretrained**: 사전학습 시작점이 도움 되나?
@@ -75,16 +80,20 @@
 
 ### 공통 학습 설정
 - 손실: CrossEntropyLoss (**class weight**로 불균형 보정)
-- 최적화: Adam(lr=1e-3), batch=32, epochs≈30
+- 최적화: **AdamW**(lr=1e-3, weight_decay=1e-4), batch=32, epochs≈30
+- 스케줄러: **ReduceLROnPlateau** (val_loss 정체 시 LR 감소)
+- **Early stopping**: val macro-F1이 N epoch 동안 안 좋아지면 중단
+- ❌ 이미지 전용(448 입력, ImageNet 정규화, rotation/flip 증강)은 오디오에 안 맞아 미사용
 
 ---
 
-## 5. 학습 / 평가
+## 5. 학습 / 평가 (3분할)
 
-- **동일 분할**: train = fold 1~9, test = fold 10 (공정 비교)
-- best 체크포인트: **검증 macro-F1** 기준 저장
-- 지표: 정확도 + 클래스별 precision/recall + **혼동행렬**
-- **비교 표**: 5개 설정의 정확도·macro-F1 한눈에 → 이긴 모델을 Jetson 메인으로
+- **3분할**: train = fold 1~8 / **val = fold 9** / test = fold 10
+  - val: 학습 중 선택(early stop·best·LR) / test: **최종 1회** 평가(보고용) → 점수 부풀림 방지
+- best 체크포인트: **검증(val) macro-F1** 기준 저장
+- 지표: 정확도 + 클래스별 precision/recall + **혼동행렬** (모두 test 기준)
+- **비교 표**: 5개 설정의 test 정확도·macro-F1 한눈에 → 이긴 모델을 Jetson 메인으로 (`outputs/comparison.md`)
 
 ---
 
@@ -95,12 +104,15 @@
 | `config.py` | 경로, 라벨 매핑, 하이퍼파라미터, **EXPERIMENTS 목록** |
 | `preprocessing.py` | 오디오 → log-mel 텐서 |
 | `dataset.py` | UrbanSound8K Dataset (3클래스 매핑, fold split) |
-| `models/backbones.py` | scratch CNN / YAMNet / MobileNetV3 (freeze_mode 옵션) |
+| `models/backbones.py` | scratch CNN / MobileNetV3 (freeze_mode 옵션) |
 | `models/heads.py` | Linear / MLP head |
+| `models/yamnet.py` | YAMNet 임베딩 추출 (TF, 동결) |
 | `models/build.py` | 설정 → 모델 조립 |
-| `train.py` | EXPERIMENTS 루프 학습 |
-| `evaluate.py` | 비교 표 출력 |
-| `infer.py` | 메인 모델 → `AudioChunk → ClassResult` |
+| `train.py` | EXPERIMENTS 루프 학습 (3분할, `--smoke`/`--exp` 옵션) |
+| `evaluate.py` | test 비교 표 → `outputs/comparison.md` |
+| `infer.py` | best 모델 → `AudioChunk → ClassResult` |
+
+> 통합 데모: `pipeline/run.py` (`--wav`/`--mic`) → "사이렌, 방향 미상, 이동 미상"
 
 ---
 

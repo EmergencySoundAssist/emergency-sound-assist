@@ -1,0 +1,23 @@
+# EmergencySoundAssist — classifier 의존성
+# 설치: pip install -r requirements.txt
+# (TF가 Python 3.13에서 막히면, 아래 TensorFlow 줄만 빼고 설치해도 scratch/MobileNet 실험은 가능)
+
+# ===== 신경망 (torch 계열) =====
+torch>=2.8            # CPU 빌드 (이미 설치됨). scratch CNN / 학습 공통
+torchvision           # MobileNetV3-small 사전학습 백본
+torchaudio            # Mel-spectrogram 등 오디오 변환
+
+# ===== YAMNet (TensorFlow 계열) =====
+# 주의: Python 3.13에서 wheel 미지원일 수 있음 → 막히면 별도 venv(예: 3.11) 사용
+tensorflow
+tensorflow-hub
+
+# ===== 오디오 / 데이터 / 평가 =====
+numpy                 # 수치 연산
+soundfile             # WAV 파일 로드
+pandas                # UrbanSound8K 메타데이터 CSV
+scikit-learn          # 정확도 / macro-F1 / 혼동행렬
+tqdm                  # 학습 진행바
+
+# ===== 실시간 마이크 데모 (선택) =====
+sounddevice           # 노트북/ReSpeaker 마이크 입력
