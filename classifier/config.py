@@ -75,7 +75,7 @@ TEST_FOLDS = [10]
 # ---------------------------------------------------------------------------
 # 학습 하이퍼파라미터 (모든 실험 공통 — 공정 비교)
 # ---------------------------------------------------------------------------
-EPOCHS = 30
+EPOCHS = 60
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4             # AdamW 가중치 감쇠
@@ -88,7 +88,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SCHED_FACTOR = 0.5
 SCHED_PATIENCE = 3
 # Early stopping: 검증 macro-F1이 N epoch 동안 안 좋아지면 중단
-EARLY_STOP_PATIENCE = 6
+EARLY_STOP_PATIENCE = 10
 
 # 스모크 테스트 (코드가 끝까지 도는지 빠르게 확인)
 SMOKE_EPOCHS = 2

@@ -80,10 +80,13 @@
 
 ### 공통 학습 설정
 - 손실: CrossEntropyLoss (**class weight**로 불균형 보정)
-- 최적화: **AdamW**(lr=1e-3, weight_decay=1e-4), batch=32, epochs≈30
-- 스케줄러: **ReduceLROnPlateau** (val_loss 정체 시 LR 감소)
-- **Early stopping**: val macro-F1이 N epoch 동안 안 좋아지면 중단
+- 최적화: **AdamW**(lr=1e-3, weight_decay=1e-4), batch=32, **epochs=60**
+- 스케줄러: **ReduceLROnPlateau** (val_loss 정체 시 LR 감소, factor=0.5, patience=3)
+- **Early stopping**: val macro-F1이 **10 epoch** 동안 안 좋아지면 중단
 - ❌ 이미지 전용(448 입력, ImageNet 정규화, rotation/flip 증강)은 오디오에 안 맞아 미사용
+
+> 설정 위치: `classifier/config.py` (`EPOCHS=60`, `EARLY_STOP_PATIENCE=10`).
+> 초기값(epochs 30 / early stop 6)에서 학습을 더 충분히 돌리도록 상향함.
 
 ---
 
@@ -129,3 +132,49 @@
 - tensorflow, tensorflow-hub (YAMNet)
 - soundfile, pandas, scikit-learn, tqdm
 - (Python 3.13에서 tensorflow wheel 호환 확인 필요)
+
+---
+
+## 9. 학습 결과 (2026-06-09, 1차)
+
+- 환경: 데스크탑 GPU (NVIDIA GTX 1050 Ti, CUDA 11.8 / torch 2.7.1+cu118), Windows
+- 설정: epochs=60, early stop patience=10, batch=32, 3분할(train 1~8 / val 9 / test 10)
+- 명령: `python -m classifier.train` → `python -m classifier.evaluate`
+
+### 비교 표 (test = fold 10)
+
+| 순위 | experiment | acc | macro-F1 | Jetson 이식 |
+|:--:|---|:--:|:--:|---|
+| 🥇 | **mobilenet_finetune_linear** | 0.878 | **0.839** | ✅ PyTorch만 |
+| 🥈 | yamnet_frozen_mlp | 0.890 | 0.837 | ⚠️ TensorFlow 필요 |
+| 🥉 | scratch_cnn | 0.883 | 0.832 | ✅ PyTorch만 (가장 가벼움) |
+| 4 | yamnet_frozen_linear | 0.878 | 0.825 | ⚠️ TensorFlow 필요 |
+| 5 | mobilenet_finetune_mlp | 0.863 | 0.813 | ✅ PyTorch만 |
+
+**채택 메인 모델: `mobilenet_finetune_linear` (macro-F1 0.839)**
+- 5개 모델 성능이 macro-F1 0.81~0.84로 비슷 → 큰 차이 없음.
+- 1등인데 **PyTorch만으로 추론**돼서 Jetson 이식이 간단(= TF 의존성 없음). YAMNet 계열은 점수 차 0.002뿐인데 TF 부담만 큼.
+- 공통 약점: **siren의 recall이 낮음**(전 모델에서 siren을 normal_traffic으로 일부 오분류). 향후 siren 데이터 보강/증강 여지.
+
+> 상세 클래스별 precision/recall·혼동행렬은 `outputs/comparison.md` 참고.
+> ⚠️ `outputs/`, `checkpoints/`는 `.gitignore` 처리 → 산출물은 로컬에만 존재(깃 미추적). 이 표는 영구 기록용으로 여기에 복사해 둠.
+
+### Jetson 이식 메모
+- 옮길 파일: `checkpoints/mobilenet_finetune_linear.pt` (state_dict 저장 → 하드웨어 독립적).
+- 로드 시 `infer.py`가 `map_location=config.DEVICE`로 처리 → Jetson GPU/CPU 자동 매핑.
+- `infer.py`는 `checkpoints/`에서 macro-F1 최고 모델을 자동 선택.
+- 주의: Jetson에는 **JetPack 버전에 맞는 NVIDIA 제공 PyTorch 휠** 설치 필요(일반 pip torch 불가). MobileNet/scratch는 PyTorch만으로 추론돼 이식이 쉬움.
+
+---
+
+## 10. 환경 / 트러블슈팅 (Windows · 한글 경로)
+
+한국어 Windows + 한글 사용자명(`C:\Users\최병호\...`) 환경에서 겪은 이슈와 해결:
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| `pip install -r requirements.txt` → `UnicodeDecodeError: 'cp949' codec ...` | requirements.txt가 UTF-8(한글 주석·`—`·`→`)인데 pip가 cp949로 디코드 | requirements.txt에 **UTF-8 BOM** 추가 → pip가 UTF-8로 자동 인식 |
+| YAMNet 실험에서 `FailedPreconditionError: ...\Temp is not a directory` | TF Hub 캐시 경로에 한글이 섞여 TF 파일 IO가 비ASCII 경로 처리 실패 | `models/yamnet.py`에 **`_ensure_ascii_cache_dir()`** 추가 → 캐시 경로에 비ASCII가 있으면 시스템 드라이브 루트의 영문 폴더(`C:\tfhub_cache`)로 자동 우회. import 시 자동 실행되어 환경변수 수동 설정 불필요 |
+| 콘솔 한글 깨짐 | Windows 콘솔 기본 인코딩(cp949) | 실행 전 `$env:PYTHONUTF8=1` (또는 `set PYTHONUTF8=1`) |
+
+> 직접 `TFHUB_CACHE_DIR` 환경변수를 지정하면 그 값이 우선 적용됨(코드가 존중).

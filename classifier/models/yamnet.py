@@ -13,7 +13,42 @@ tfhub YAMNet은 추론용으로 패키징돼 있어 '전체 finetune'이 까다�
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import numpy as np
+
+
+def _ensure_ascii_cache_dir() -> None:
+    """TF Hub 캐시 경로를 ASCII(영문) 폴더로 강제.
+
+    Windows 사용자명/경로에 한글 등 비ASCII 문자가 있으면 TF Hub의 파일 IO가
+    경로를 처리하지 못해 FailedPreconditionError('... is not a directory')가 난다.
+    기본 캐시 경로(임시폴더)에 비ASCII가 섞여 있으면 시스템 드라이브 루트의
+    영문 폴더로 우회한다. (사용자가 직접 TFHUB_CACHE_DIR을 지정했다면 존중)
+    """
+    if os.environ.get("TFHUB_CACHE_DIR"):
+        return
+
+    def _is_ascii(s: str) -> bool:
+        try:
+            s.encode("ascii")
+            return True
+        except UnicodeEncodeError:
+            return False
+
+    default_tmp = os.environ.get("TEMP") or os.environ.get("TMP") or ""
+    if default_tmp and _is_ascii(default_tmp):
+        cache = Path(default_tmp) / "tfhub_cache"
+    else:
+        system_drive = os.environ.get("SystemDrive", "C:")
+        cache = Path(system_drive + os.sep) / "tfhub_cache"
+
+    cache.mkdir(parents=True, exist_ok=True)
+    os.environ["TFHUB_CACHE_DIR"] = str(cache)
+
+
+_ensure_ascii_cache_dir()
 
 _MODEL = None
 _YAMNET_URL = "https://tfhub.dev/google/yamnet/1"

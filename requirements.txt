@@ -1,4 +1,4 @@
-# EmergencySoundAssist — classifier 의존성
+﻿# EmergencySoundAssist — classifier 의존성
 # 설치: pip install -r requirements.txt
 # (TF가 Python 3.13에서 막히면, 아래 TensorFlow 줄만 빼고 설치해도 scratch/MobileNet 실험은 가능)
 
