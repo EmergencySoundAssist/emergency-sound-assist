@@ -63,7 +63,14 @@ pip install -r requirements.txt
    data/UrbanSound8K/audio/fold1 ... fold10/
    ```
 
-### 3. 학습 / 평가 / 실행
+### 3. (선택) 학습된 모델 받기 — 재학습 없이 바로 추론
+직접 학습하지 않고 바로 써보려면, [Releases](https://github.com/EmergencySoundAssist/emergency-sound-assist/releases)에서 채택 모델을 받아 `checkpoints/`에 넣으면 된다.
+```bash
+gh release download model-v1 --repo EmergencySoundAssist/emergency-sound-assist --dir checkpoints
+```
+> 현재 채택 모델: `mobilenet_finetune_linear` (test macro-F1 0.839). 자세한 비교 → [docs/classifier/design.md](docs/classifier/design.md#9-학습-결과-2026-06-09-1차)
+
+### 4. 학습 / 평가 / 실행
 ```bash
 python -m classifier.train --smoke      # 빠른 검증(2 epoch, 소수 샘플)
 python -m classifier.train              # 본학습 (전체, 5개 실험)
