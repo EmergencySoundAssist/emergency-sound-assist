@@ -17,11 +17,10 @@ from core.types import AudioChunk, Direction, DirectionResult
 # ---------------------------------------------------------------------------
 # ReSpeaker 의존성 (있으면 쓰고, 없으면 조용히 비활성화)
 # ---------------------------------------------------------------------------
-# pyusb 와 Seeed 의 tuning.py 가 모두 있어야 ReSpeaker DoA 폴링이 가능.
-# 노트북엔 둘 다 없을 수 있으므로 import 실패해도 모듈 로드는 깨지지 않게 둔다.
+# respeaker_tuning.find() 가 내부에서 pyusb 를 쓰므로, pyusb 가 없으면
+# 아래 import 자체가 ImportError 로 떨어진다 → 노트북에서도 안전하게 비활성화.
 try:
-    import usb.core  # type: ignore
-    from .respeaker_tuning import Tuning  # type: ignore
+    from .respeaker_tuning import find as _respeaker_find  # type: ignore
     _RESPEAKER_LIB_AVAILABLE = True
 except ImportError:
     _RESPEAKER_LIB_AVAILABLE = False
@@ -46,17 +45,17 @@ def angle_to_direction(angle_deg: float) -> Direction:
 def _read_respeaker_angle() -> Optional[float]:
     """ReSpeaker XVF-3000 의 자체 DoA 값(0~359°)을 읽는다.
 
-    라이브러리 또는 장치가 없으면 None 을 반환한다(노트북 단계 정상 경로).
-    하드웨어 도착 후 아래 TODO 블록만 채우면 1단계 MVP 완성.
+    아래 세 경우 모두 None 반환 (노트북 단계 정상 경로):
+        · pyusb / respeaker_tuning import 실패
+        · USB 장치 미감지 (마이크 안 꽂힘)
+        · ※ 실물 검증은 Jetson 단계에서 처음 이뤄짐
     """
     if not _RESPEAKER_LIB_AVAILABLE:
         return None
-    # TODO(하드웨어 도착 후):
-    #   1) dev = usb.core.find(idVendor=0x2886, idProduct=0x0018)
-    #      - 실패 시 None 반환
-    #   2) mic = Tuning(dev)
-    #   3) return float(mic.direction)
-    return None
+    mic = _respeaker_find()          # 장치 못 찾으면 None 반환
+    if mic is None:
+        return None
+    return float(mic.direction)
 
 
 def estimate_direction(
