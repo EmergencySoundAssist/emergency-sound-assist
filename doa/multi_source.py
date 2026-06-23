@@ -121,8 +121,15 @@ def spatial_spectrum(
         for ch in range(4)
     ])
 
+    algo_key = {"srp": "SRP", "music": "MUSIC", "normmusic": "NormMUSIC"}.get(
+        algo.lower(), algo
+    )
+    if algo_key not in pra.doa.algorithms:
+        raise ValueError(
+            f"알 수 없는 algo='{algo}'. 사용 가능: {sorted(pra.doa.algorithms)}"
+        )
     grid = np.linspace(-np.pi, np.pi, 360, endpoint=False)
-    doa = pra.doa.algorithms[algo](
+    doa = pra.doa.algorithms[algo_key](
         mic_locations(radius_m), fs, nfft,
         c=SPEED_OF_SOUND, num_src=num_src, azimuth=grid,
     )
@@ -144,15 +151,19 @@ def estimate_multiple_directions(
     height_ratio: float = 0.5,
     min_sep_deg: float = 30.0,
     radius_m: float = MIC_RADIUS_M,
+    algo: str = "SRP",
 ) -> List[Tuple[float, Direction]]:
     """raw 4채널 → [(방위각, Direction), ...] 동시 여러 방향.
 
-    각도는 SRP-PHAT 추정 raw 방위각이며, `angle_to_direction` 으로 4방향 매핑한다.
+    각도는 추정 raw 방위각이며, `angle_to_direction` 으로 4방향 매핑한다.
     (raw 각도 ↔ 차량 기준 보정은 estimator 의 보정 상수를 따른다 — 모듈 상단 ⚠️ 참고.)
+
+    algo: 'SRP'(기본) 또는 'MUSIC'. 다중 음원 분리는 MUSIC 이 더 정확하나
+          num_src 정확도에 민감하다. 4-mic 어레이는 최대 3개(num_src≤3)까지가 한계.
     """
     az, spec = spatial_spectrum(
         raw4, fs=fs, nfft=nfft, freq_range=freq_range,
-        num_src=num_src, radius_m=radius_m,
+        num_src=num_src, radius_m=radius_m, algo=algo,
     )
     angles = pick_peaks(
         spec, az, max_src=num_src,
@@ -161,20 +172,54 @@ def estimate_multiple_directions(
     return [(a, angle_to_direction(a)) for a in angles]
 
 
-def capture_raw4(seconds: float = 1.0, fs: int = FS_DEFAULT) -> np.ndarray:
-    """ReSpeaker 6채널 중 ch1~4(원본)만 캡처. sounddevice 의존."""
+def find_respeaker_device(sd) -> Optional[int]:
+    """입력 6채널 이상이면서 이름에 'respeaker' 가 있는 장치 인덱스를 찾는다."""
+    for i, dev in enumerate(sd.query_devices()):
+        if dev["max_input_channels"] >= 6 and "respeaker" in dev["name"].lower():
+            return i
+    return None
+
+
+def capture_raw4(
+    seconds: float = 1.0,
+    fs: int = FS_DEFAULT,
+    device: Optional[int] = None,
+) -> np.ndarray:
+    """ReSpeaker 6채널 중 ch1~4(원본)만 캡처. sounddevice 의존.
+
+    device 미지정 시 ReSpeaker(6채널 입력)를 자동 탐지한다.
+    기본 입력이 내장 마이크(1채널)면 6채널 캡처가 실패하므로 명시 지정이 필요하다.
+    """
     try:
         import sounddevice as sd
     except ImportError as e:  # pragma: no cover - 환경 의존
         raise ImportError("sounddevice 가 필요합니다: pip install sounddevice") from e
-    data = sd.rec(int(seconds * fs), samplerate=fs, channels=6, dtype="float32")
+
+    if device is None:
+        device = find_respeaker_device(sd)
+        if device is None:
+            raise RuntimeError(
+                "ReSpeaker(입력 6채널) 장치를 찾지 못했습니다. "
+                "`python3 -c \"import sounddevice as sd; print(sd.query_devices())\"` 로 "
+                "확인 후 device= 인덱스를 직접 지정하세요."
+            )
+    data = sd.rec(
+        int(seconds * fs), samplerate=fs, channels=6, dtype="float32", device=device
+    )
     sd.wait()
     return np.asarray(data)[:, 1:5]
 
 
 if __name__ == "__main__":
     # 실물 캡처 → 동시 다방향 추정 (ReSpeaker + pyroomacoustics 필요)
+    import sounddevice as sd
+
+    dev = find_respeaker_device(sd)
+    print(f"ReSpeaker 장치 인덱스: {dev}")
     print("raw 4채널 1초 캡처 → 다중 방향 추정")
-    chunk = capture_raw4(1.0)
-    for ang, direction in estimate_multiple_directions(chunk):
+    chunk = capture_raw4(1.0, device=dev)
+    results = estimate_multiple_directions(chunk)
+    if not results:
+        print("  (peak 없음 — 소리가 없거나 임계 미만)")
+    for ang, direction in results:
         print(f"  {ang:5.0f}° → {direction.value}")
