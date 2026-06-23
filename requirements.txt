@@ -1,0 +1,14 @@
+# emergency-sound-assist 의존성
+# 권장: Jetson(JetPack)과 동일한 Python 3.10 환경 사용
+#   conda create -n airacle python=3.10 -y && conda activate airacle
+#   pip install -r requirements.txt
+
+# 런타임
+numpy>=1.24
+scipy>=1.10
+sounddevice>=0.4          # ReSpeaker 6채널 오디오 캡처
+pyusb>=1.2               # ReSpeaker USB 제어 — 자체 DoA 폴링 (doa/respeaker_tuning.py)
+pyroomacoustics>=0.7     # 다중 음원 방향추정 SRP-PHAT/MUSIC (doa/multi_source.py)
+
+# 개발
+pytest>=7.0
