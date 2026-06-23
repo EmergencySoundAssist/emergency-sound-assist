@@ -26,20 +26,46 @@ except ImportError:
     _RESPEAKER_LIB_AVAILABLE = False
 
 
-def angle_to_direction(angle_deg: float) -> Direction:
-    """0~359° → 4방향. 경계는 [start, end) 반개구간으로 처리.
+# ---------------------------------------------------------------------------
+# 보드 장착 보정 (실측으로 확정 — docs/doa/direction-mapping.md 4절 참고)
+# ---------------------------------------------------------------------------
+# ReSpeaker raw DOA 규약: 0°=보드 우측, 반시계(CCW) 증가 (보드 인쇄 0/90/180/270).
+# 케이블이 가리키는 방향을 '후방'으로 삼아 차량 기준으로 재정렬한다.
+#   REAR_RAW_DEG : 케이블이 가리키는 raw 각도. 후방(180°)에 맞춘다.
+#   MIRROR       : 좌/우 반전 보정. 실측에서 좌우 반대로 나오면 토글.
+# TODO(보정): 차량 장착 상태에서 4방향 실측 후 아래 두 값을 확정할 것.
+REAR_RAW_DEG = 270.0
+MIRROR = True
 
-    전 315~45° / 우 45~135° / 후 135~225° / 좌 225~315°
-    (docs/doa/design.md 의 1단계 매핑 규칙)
+
+def _to_vehicle_angle(raw_deg: float) -> float:
+    """raw DOA → 차량 기준 각도(전 0° / 우 90° / 후 180° / 좌 270°).
+
+    케이블 방향(`REAR_RAW_DEG`)을 후방(180°)에 맞추고, 필요시 좌/우를 반전한다.
+    장착에서 비롯되는 회전·반전은 모두 이 함수(+상수 2개)에 모이고,
+    `angle_to_direction` 의 사분면 경계는 표준 나침반 순서로 고정된다.
     """
-    deg = angle_deg % 360.0
+    deg = raw_deg % 360.0
+    if MIRROR:
+        deg = (360.0 - deg) % 360.0
+    cable = (360.0 - REAR_RAW_DEG) % 360.0 if MIRROR else REAR_RAW_DEG
+    return (deg - cable + 180.0) % 360.0
+
+
+def angle_to_direction(raw_deg: float) -> Direction:
+    """raw DOA(0~359°) → 4방향. 케이블=후방 기준. 경계는 [start, end) 반개구간.
+
+    먼저 `_to_vehicle_angle` 로 차량 기준(전 0/우 90/후 180/좌 270)으로 바꾼 뒤
+    ±45° 폭으로 사분면을 가른다.
+    """
+    deg = _to_vehicle_angle(raw_deg)
     if 45.0 <= deg < 135.0:
         return Direction.RIGHT
     if 135.0 <= deg < 225.0:
         return Direction.REAR
     if 225.0 <= deg < 315.0:
         return Direction.LEFT
-    return Direction.FRONT  # 315~360 또는 0~45
+    return Direction.FRONT  # 315~360 또는 0~45 (차량 기준 전방)
 
 
 def _read_respeaker_angle() -> Optional[float]:
@@ -78,6 +104,9 @@ def estimate_direction(
     return DirectionResult(direction=angle_to_direction(angle_deg), angle_deg=angle_deg)
 
 if __name__ == "__main__":
+    print(f"보정: REAR_RAW_DEG={REAR_RAW_DEG}, MIRROR={MIRROR}")
+    print("raw → 차량각 → 방향")
     for a in [0, 90, 180, 270, 44, 45, 359]:
-        print(a, "→", angle_to_direction(a))
-    print("주입 없음 →", estimate_direction(None))   # UNKNOWN 나와야 정상
+        print(f"  {a:>3} → {_to_vehicle_angle(a):>5.0f} → {angle_to_direction(a).value}")
+    # ReSpeaker 미연결 시 UNKNOWN, 연결 시 실측 각도 출력
+    print("주입 없음 →", estimate_direction(None))
