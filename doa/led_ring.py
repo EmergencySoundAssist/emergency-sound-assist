@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Sequence, Tuple
 
+from doa import config
+
 NUM_LEDS = 12
 DEG_PER_LED = 360.0 / NUM_LEDS
 
@@ -24,9 +26,9 @@ _WINDEX = 0x1C
 _CMD_SHOW = 6
 _CMD_BRIGHTNESS = 0x20
 
-# LED 인덱스 보정: 방위각 0°가 물리적으로 어느 LED인지 (실물 보고 조정).
-# 방향추정 각도 규약과 LED 배치가 어긋나면 이 값으로 회전 보정한다.
-LED_OFFSET = 0
+# LED 인덱스 보정: 방위각 0°가 물리적으로 어느 LED인지 (값은 doa/config.py).
+# 방향추정 각도 규약과 LED 배치가 어긋나면 config.LED_OFFSET 으로 회전 보정한다.
+LED_OFFSET = config.LED_OFFSET
 
 RGB = Tuple[int, int, int]
 
@@ -119,7 +121,7 @@ if __name__ == "__main__":
     ring = find()
     if ring is None:
         raise SystemExit("ReSpeaker(LED 링)를 찾지 못함 — USB 연결/pyusb 확인")
-    ring.set_brightness(10)
+    ring.set_brightness(config.LED_BRIGHTNESS)
     print("LED 한 바퀴 점등 테스트 (Ctrl+C 종료)")
     try:
         i = 0

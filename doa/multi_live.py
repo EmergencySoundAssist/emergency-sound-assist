@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-from doa import led_ring
+from doa import config, led_ring
 from doa.multi_source import (
     FS_DEFAULT,
     estimate_multiple_directions,
@@ -35,23 +35,25 @@ def _compass_bar(angles_deg, width: int = 36) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--threshold", type=float, default=0.01,
-                    help="이 RMS 미만이면 '조용함' 처리 (기본 0.01)")
-    ap.add_argument("--window", type=float, default=0.4,
-                    help="분석 창 길이(초) — 길수록 방향 해상도↑ (기본 0.4)")
-    ap.add_argument("--hop", type=float, default=0.1,
-                    help="갱신 간격(초) — 짧을수록 자주 갱신(빠름). 기본 0.1 = 약 10Hz")
-    ap.add_argument("--num", type=int, default=2, help="최대 동시 음원 수")
-    ap.add_argument("--height", type=float, default=0.5,
-                    help="2번째 peak 인정 임계(최대치 대비). 낮출수록 약한 음원도 잡음 (기본 0.5)")
-    ap.add_argument("--min-sep", type=float, default=30.0,
-                    help="두 음원 최소 각도 간격(도). 낮출수록 가까운 음원 분리 (기본 30)")
-    ap.add_argument("--algo", default="SRP",
-                    help="DoA 알고리즘: SRP(기본) 또는 MUSIC (다중 음원엔 MUSIC 유리)")
-    ap.add_argument("--led", action="store_true",
-                    help="감지된 방향을 ReSpeaker LED 링에 점등")
-    ap.add_argument("--hold", type=float, default=1.0,
-                    help="감지 후 LED 유지 시간(초). 소리가 끊겨도 이 시간 동안 불빛 유지 (기본 1.0)")
+    # 기본값은 doa/config.py 에서 가져오고, 플래그를 주면 이번 실행만 덮어쓴다.
+    ap.add_argument("--threshold", type=float, default=config.THRESHOLD,
+                    help=f"이 RMS 미만이면 '조용함' (config={config.THRESHOLD})")
+    ap.add_argument("--window", type=float, default=config.WINDOW,
+                    help=f"분석 창 길이(초) — 길수록 방향 해상도↑ (config={config.WINDOW})")
+    ap.add_argument("--hop", type=float, default=config.HOP,
+                    help=f"갱신 간격(초) — 짧을수록 빠름 (config={config.HOP})")
+    ap.add_argument("--num", type=int, default=config.NUM_SRC,
+                    help=f"최대 동시 음원 수 (config={config.NUM_SRC})")
+    ap.add_argument("--height", type=float, default=config.HEIGHT_RATIO,
+                    help=f"2번째 peak 임계(최대 대비). 낮출수록 약한 음원도 (config={config.HEIGHT_RATIO})")
+    ap.add_argument("--min-sep", type=float, default=config.MIN_SEP_DEG,
+                    help=f"두 음원 최소 각도 간격(도) (config={config.MIN_SEP_DEG})")
+    ap.add_argument("--algo", default=config.ALGO,
+                    help=f"DoA 알고리즘 SRP/MUSIC (config={config.ALGO})")
+    ap.add_argument("--led", action=argparse.BooleanOptionalAction, default=config.LED,
+                    help=f"감지 방향을 LED 링에 점등 (--led/--no-led, config={config.LED})")
+    ap.add_argument("--hold", type=float, default=config.HOLD,
+                    help=f"감지 후 LED 유지 시간(초) (config={config.HOLD})")
     args = ap.parse_args()
 
     import sounddevice as sd
@@ -67,7 +69,7 @@ def main() -> None:
         if ring is None:
             print("LED 링을 못 찾음(pyusb 확인) — LED 없이 진행.")
         else:
-            ring.set_brightness(10)
+            ring.set_brightness(config.LED_BRIGHTNESS)
     fs = FS_DEFAULT
     win_n = int(args.window * fs)
     hop_n = max(1, int(args.hop * fs))
