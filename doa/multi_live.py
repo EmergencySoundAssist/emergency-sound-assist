@@ -13,6 +13,7 @@ Ctrl+C 로 종료.
 from __future__ import annotations
 
 import argparse
+import time
 
 import numpy as np
 
@@ -49,6 +50,8 @@ def main() -> None:
                     help="DoA 알고리즘: SRP(기본) 또는 MUSIC (다중 음원엔 MUSIC 유리)")
     ap.add_argument("--led", action="store_true",
                     help="감지된 방향을 ReSpeaker LED 링에 점등")
+    ap.add_argument("--hold", type=float, default=1.0,
+                    help="감지 후 LED 유지 시간(초). 소리가 끊겨도 이 시간 동안 불빛 유지 (기본 1.0)")
     args = ap.parse_args()
 
     import sounddevice as sd
@@ -73,6 +76,8 @@ def main() -> None:
           f"(~{1/args.hop:.0f}Hz) | LED={'on' if ring else 'off'} | Ctrl+C 종료\n")
 
     multi_count = 0
+    lit = False           # 지금 LED 가 켜져 있는지
+    last_seen = 0.0       # 마지막 감지 시각(monotonic)
     try:
         # 연속 스트림: 끊김 없이 hop 단위로 읽고, 최근 window 를 분석 (슬라이딩 윈도우)
         with sd.InputStream(samplerate=fs, channels=6, device=dev,
@@ -81,32 +86,39 @@ def main() -> None:
                 block, overflowed = stream.read(hop_n)        # ~hop 초 만큼 블록
                 rolling = np.roll(rolling, -hop_n, axis=0)
                 rolling[-hop_n:] = np.asarray(block)[:, 1:5]   # ch1~4 만
+                now = time.monotonic()
 
                 rms = float(np.sqrt(np.mean(rolling ** 2)))
-                if rms < args.threshold:
-                    if ring:
-                        ring.off()
-                    print(f"\r{_compass_bar([])}  조용함 (rms={rms:.4f})        ", end="", flush=True)
-                    continue
-
-                results = estimate_multiple_directions(
-                    rolling, fs=fs, num_src=args.num, algo=args.algo,
-                    height_ratio=args.height, min_sep_deg=args.min_sep,
-                )
+                results = []
+                if rms >= args.threshold:
+                    results = estimate_multiple_directions(
+                        rolling, fs=fs, num_src=args.num, algo=args.algo,
+                        height_ratio=args.height, min_sep_deg=args.min_sep,
+                    )
                 angles = [a for a, _ in results]
-                if ring:
-                    ring.show_directions(angles)
-                label = "  ".join(f"{a:3.0f}°({d.value})" for a, d in results) or "(peak 없음)"
-                lag = " ⚠느림" if overflowed else ""
-                line = f"{_compass_bar(angles)}  {label}  rms={rms:.3f}{lag}"
 
-                if len(angles) >= 2:
-                    # 다중 감지 → 영구 로그 한 줄로 남김 (newline)
-                    multi_count += 1
-                    print(f"\r#{multi_count:<3} ★다중({len(angles)})  {line}        ")
+                if angles:
+                    # 새 감지 → LED 점등 + 유지 타이머 갱신
+                    if ring:
+                        ring.show_directions(angles)
+                        lit = True
+                    last_seen = now
+                    label = "  ".join(f"{a:3.0f}°({d.value})" for a, d in results)
+                    lag = " ⚠느림" if overflowed else ""
+                    line = f"{_compass_bar(angles)}  {label}  rms={rms:.3f}{lag}"
+                    if len(angles) >= 2:
+                        multi_count += 1
+                        print(f"\r#{multi_count:<3} ★다중({len(angles)})  {line}        ")
+                    else:
+                        print(f"\r{line}        ", end="", flush=True)
                 else:
-                    # 단일/없음 → 실시간 한 줄 덮어쓰기
-                    print(f"\r{line}        ", end="", flush=True)
+                    # 감지 없음 → hold 동안은 직전 불빛 유지, 지나면 끔
+                    held = lit and (now - last_seen) <= args.hold
+                    if ring and lit and not held:
+                        ring.off()
+                        lit = False
+                    state = "유지중" if held else "조용함"
+                    print(f"\r{_compass_bar([])}  {state} (rms={rms:.4f})        ", end="", flush=True)
     except KeyboardInterrupt:
         if ring:
             ring.off()
