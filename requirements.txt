@@ -6,6 +6,10 @@
 
 # ── 필수 (코어 신호처리: 도플러·멜·FFT) ─────────────────
 numpy>=1.24
+scipy>=1.10              # classifier 리샘플(16k→22.05k) — cnn_attn ONNX 전처리
+
+# ── 검출 모델 추론 (cnn_attn_full ONNX) ──────────────────
+onnxruntime>=1.17        # CPU(노트북). Jetson은 onnxruntime-gpu 또는 TensorRT EP
 
 # ── 오디오 입력 ────────────────────────────────────────
 # --mic (실시간 마이크): sounddevice  ※ 시스템 패키지 libportaudio2 필요
