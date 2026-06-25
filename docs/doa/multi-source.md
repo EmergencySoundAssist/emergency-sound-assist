@@ -20,11 +20,18 @@ raw 4채널 → STFT → SRP-PHAT 공간 스펙트럼 → 다중 peak 추출 →
 | `mic_locations()` | 마이크 좌표(2,4) — 보드 45/135/225/315° | numpy |
 | `spatial_spectrum()` | raw → (방위각 그리드, 에너지) | **pyroomacoustics** |
 | `pick_peaks()` | 스펙트럼에서 봉우리 여러 개 | numpy/scipy |
-| `estimate_multiple_directions()` | 위 둘 묶어 `[(각도, Direction)]` | pyroomacoustics |
+| `spectrum_confidence()` | 주엽 우월도(주엽÷반대편 반원 최대) — 신뢰도 게이팅 지표 | numpy |
+| `estimate_multiple_directions()` | 위를 묶어 `[(각도, Direction)]` (`with_confidence=True` 면 `(results, conf)`) | pyroomacoustics |
 | `capture_raw4()` | ReSpeaker ch1~4 캡처 | sounddevice |
 
-`pick_peaks`/`mic_locations`는 순수 numpy → **하드웨어·pra 없이 단위 테스트됨**
-([tests/test_multi_source.py](../../tests/test_multi_source.py), 9개).
+`pick_peaks`/`mic_locations`/`spectrum_confidence`는 순수 numpy/scipy → **하드웨어·pra 없이 단위 테스트됨**
+([tests/test_multi_source.py](../../tests/test_multi_source.py), 16개).
+
+### 신뢰도 게이팅 (`spectrum_confidence`)
+작은 4-mic 어레이는 주엽이 넓어 `peak/평균` 이 1 부근에 몰려 둔감하다. 대신 **주엽 중심 ±90°를 뺀
+반대편 반원의 최대치**와 비교한다(주엽÷반대편). 한 방향만 뚜렷하면 크고(넓어도), ±180° 반사로
+반대편에 맞먹는 봉우리가 생기면 1 부근 → `config.CONF_MIN` 미만이면 실시간 루프가 '방향 불확실' 처리.
+시간 다수결과 함께 ±180° 튐을 억제한다([tracking.py](../../doa/tracking.py), [running.md](./running.md)).
 
 ## peak 개수 조절 (3개 파라미터)
 | 파라미터 | 역할 |
@@ -35,13 +42,14 @@ raw 4채널 → STFT → SRP-PHAT 공간 스펙트럼 → 다중 peak 추출 →
 
 ## 설치
 ```bash
-pip install pyroomacoustics scipy sounddevice numpy
+pip install -e ".[multisource]"   # scipy, sounddevice, pyroomacoustics (pyproject extras)
 ```
 
 ## 한계 (4-mic 소형 어레이)
 - 분리 가능한 동시 음원은 **현실적으로 ~2개**. 그 이상은 신뢰도 급락.
+- 단일 음원에 `--num`을 2로 두면 **±180° 유령 2번째 peak**가 뜨므로, MVP 기본은 `config.NUM_SRC=1`.
 - 두 소리가 **각도/주파수로 충분히 떨어져야** 분리됨.
-- 연산량↑ → Jetson 단계에서 현실적.
+- 연산량↑ → pyroomacoustics 는 ARM(Jetson)에서 빌드 무거움 ([jetson.md](./jetson.md)).
 
 ## ⚠️ 보정 (검증 순서)
 pyroomacoustics 방위각(반시계, 0°=+x)과 ReSpeaker raw DOA 규약이 다를 수 있다.
@@ -54,6 +62,9 @@ pyroomacoustics 방위각(반시계, 0°=+x)과 ReSpeaker raw DOA 규약이 다�
 
 ## 진행 상태
 - [x] `pick_peaks` / `mic_locations` 구현 + 테스트
-- [x] `spatial_spectrum` / `estimate_multiple_directions` 골격 (pyroomacoustics)
+- [x] `spatial_spectrum` / `estimate_multiple_directions` (pyroomacoustics)
+- [x] `spectrum_confidence` 신뢰도 게이팅 + 시간 다수결([tracking.py](../../doa/tracking.py))
+- [x] Mac ReSpeaker 실물 단일·다중 방향 + LED 확인
 - [ ] `MIC_RADIUS_M` 데이터시트/PCB로 확정 (현재 0.046m 추정)
-- [ ] 실물 단일→다중 음원 검증 + 파라미터 튜닝
+- [ ] `CONF_MIN`(현재 2.0) 차량/실차 환경 conf 분포로 미세조정
+- [ ] Jetson 실물 검증 ([jetson.md](./jetson.md))
