@@ -28,5 +28,6 @@ def test_config_has_expected_keys():
     """주요 튜닝/보정 키가 빠지지 않았는지."""
     for key in ("WINDOW", "HOP", "HOLD", "NUM_SRC", "ALGO", "HEIGHT_RATIO",
                 "MIN_SEP_DEG", "THRESHOLD", "LED", "REAR_RAW_DEG", "MIRROR",
-                "MIC_RADIUS_M", "LED_OFFSET", "LED_BRIGHTNESS"):
+                "MIC_RADIUS_M", "LED_OFFSET", "LED_BRIGHTNESS",
+                "SMOOTH", "CONF_MIN", "SMOOTH_WIN", "SMOOTH_MIN_FRAMES"):
         assert hasattr(config, key), f"config.{key} 누락"

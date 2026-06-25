@@ -3,9 +3,21 @@
 짧은 창을 반복 캡처해 방향을 계속 출력한다. 소리를 옮겨가며 각도가 따라오는지
 눈으로 확인하는 용도. 소리가 작으면(조용하면) 엉뚱한 각도 대신 "조용함"을 띄운다.
 
+반사·잡음으로 방향이 ±180° 튀는 것을 막기 위해 **시간 다수결+신뢰도 게이팅**을
+기본 적용한다(doa/tracking.py). 끄고 옛 즉시반응 동작과 비교하려면 `--no-smooth`.
+
+스무딩 범위/지연 주의:
+  · **검출**(소리 왔다 = rms 임계)은 즉시 그대로 — 지연 0.
+  · **화살표(방향)** 는 안정화되며, 새 음원의 첫 화살표는 신뢰 프레임이 모일 때까지
+    최대 (SMOOTH_MIN_FRAMES-1) hop(기본 ~0.1초) 늦게 뜬다. 사이렌(수 초)엔 무시 가능.
+  · 안정화는 **대표(primary) 방향만** 적용. 동시 음원의 부방향은 이번 프레임값(best-effort)
+    이라 여전히 튈 수 있다.
+
 실행 (airacle 환경):
     python -m doa.multi_live
-    python -m doa.multi_live --threshold 0.02 --window 0.4 --num 2
+    python -m doa.multi_live --led
+    python -m doa.multi_live --no-smooth          # 스무딩 끄고 비교
+    python -m doa.multi_live --conf-min 8 --num 2
 
 Ctrl+C 로 종료.
 """
@@ -18,11 +30,13 @@ import time
 import numpy as np
 
 from doa import config, led_ring
+from doa.estimator import angle_to_direction
 from doa.multi_source import (
     FS_DEFAULT,
     estimate_multiple_directions,
     find_respeaker_device,
 )
+from doa.tracking import DirectionTracker
 
 
 def _compass_bar(angles_deg, width: int = 36) -> str:
@@ -54,6 +68,11 @@ def main() -> None:
                     help=f"감지 방향을 LED 링에 점등 (--led/--no-led, config={config.LED})")
     ap.add_argument("--hold", type=float, default=config.HOLD,
                     help=f"감지 후 LED 유지 시간(초) (config={config.HOLD})")
+    ap.add_argument("--smooth", action=argparse.BooleanOptionalAction, default=config.SMOOTH,
+                    help=f"시간 다수결+신뢰도 게이팅으로 방향 튐 억제 "
+                         f"(--smooth/--no-smooth, config={config.SMOOTH})")
+    ap.add_argument("--conf-min", type=float, default=config.CONF_MIN,
+                    help=f"이 신뢰도(주엽 우월도) 미만이면 '방향 불확실' (config={config.CONF_MIN})")
     args = ap.parse_args()
 
     import sounddevice as sd
@@ -74,8 +93,18 @@ def main() -> None:
     win_n = int(args.window * fs)
     hop_n = max(1, int(args.hop * fs))
     rolling = np.zeros((win_n, 4), dtype="float32")  # 최근 window 만큼의 ch1~4
+
+    # 시간 견고화: 최근 SMOOTH_WIN 초의 신뢰 프레임을 원형 다수결 (대표 방향만 안정화)
+    tracker = None
+    if args.smooth:
+        smooth_frames = max(1, round(config.SMOOTH_WIN / args.hop))
+        tracker = DirectionTracker(
+            maxlen=smooth_frames, conf_min=args.conf_min,
+            min_frames=config.SMOOTH_MIN_FRAMES,
+        )
     print(f"ReSpeaker device={dev} | window={args.window}s hop={args.hop}s "
-          f"(~{1/args.hop:.0f}Hz) | LED={'on' if ring else 'off'} | Ctrl+C 종료\n")
+          f"(~{1/args.hop:.0f}Hz) | LED={'on' if ring else 'off'} | "
+          f"smooth={'on' if tracker else 'off'} | Ctrl+C 종료\n")
 
     multi_count = 0
     lit = False           # 지금 LED 가 켜져 있는지
@@ -92,34 +121,66 @@ def main() -> None:
 
                 rms = float(np.sqrt(np.mean(rolling ** 2)))
                 results = []
+                conf = 0.0
                 if rms >= args.threshold:
-                    results = estimate_multiple_directions(
-                        rolling, fs=fs, num_src=args.num, algo=args.algo,
-                        height_ratio=args.height, min_sep_deg=args.min_sep,
-                    )
-                angles = [a for a, _ in results]
+                    if tracker is not None:
+                        results, conf = estimate_multiple_directions(
+                            rolling, fs=fs, num_src=args.num, algo=args.algo,
+                            height_ratio=args.height, min_sep_deg=args.min_sep,
+                            with_confidence=True,
+                        )
+                    else:
+                        results = estimate_multiple_directions(
+                            rolling, fs=fs, num_src=args.num, algo=args.algo,
+                            height_ratio=args.height, min_sep_deg=args.min_sep,
+                        )
 
-                if angles:
-                    # 새 감지 → LED 점등 + 유지 타이머 갱신
+                # 표시할 방향 결정: 스무딩 ON 이면 대표(primary)만 다수결로 안정화하고
+                # 부방향은 이번 프레임값(best-effort). 신뢰 프레임이 모자라면 '방향 불확실'.
+                uncertain = False
+                if tracker is not None:
+                    primary = results[0][0] if results else None
+                    tr = tracker.update(primary, conf)
+                    if tr.angle is not None:
+                        angles = [tr.angle] + [a for a, _ in results[1:]]
+                    else:
+                        angles = []
+                        uncertain = bool(results)  # peak 는 있는데 방향 확정 실패
+                else:
+                    angles = [a for a, _ in results]
+
+                # '실감지'는 이번 프레임에 실제 peak 가 있을 때만(live). 스무딩으로 tr.angle 이
+                # 무음 중에도 잠깐 남을 수 있는데, 그땐 last_seen 을 갱신하지 않아야 hold 가
+                # '마지막 실감지' 기준으로 동작한다 (LED-on 이 hold 를 초과하지 않게).
+                live = bool(results)
+
+                if angles and live:
+                    # 방향 확정 → LED 점등 + 유지 타이머 갱신
                     if ring:
                         ring.show_directions(angles)
                         lit = True
                     last_seen = now
-                    label = "  ".join(f"{a:3.0f}°({d.value})" for a, d in results)
+                    label = "  ".join(
+                        f"{a:3.0f}°({angle_to_direction(a).value})" for a in angles
+                    )
+                    conf_s = f" conf={conf:.1f}" if tracker is not None else ""
                     lag = " ⚠느림" if overflowed else ""
-                    line = f"{_compass_bar(angles)}  {label}  rms={rms:.3f}{lag}"
+                    line = f"{_compass_bar(angles)}  {label}  rms={rms:.3f}{conf_s}{lag}"
                     if len(angles) >= 2:
                         multi_count += 1
                         print(f"\r#{multi_count:<3} ★다중({len(angles)})  {line}        ")
                     else:
                         print(f"\r{line}        ", end="", flush=True)
                 else:
-                    # 감지 없음 → hold 동안은 직전 불빛 유지, 지나면 끔
+                    # 방향 없음 → hold 동안은 직전 불빛 유지, 지나면 끔
                     held = lit and (now - last_seen) <= args.hold
                     if ring and lit and not held:
                         ring.off()
                         lit = False
-                    state = "유지중" if held else "조용함"
+                    if uncertain:
+                        state = f"방향 불확실 (감지됨 conf={conf:.1f})"
+                    else:
+                        state = "유지중" if held else "조용함"
                     print(f"\r{_compass_bar([])}  {state} (rms={rms:.4f})        ", end="", flush=True)
     except KeyboardInterrupt:
         if ring:

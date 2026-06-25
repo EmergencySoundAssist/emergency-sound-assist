@@ -88,6 +88,35 @@ def pick_peaks(
     return [float(azimuth_deg[i]) for i in idx]
 
 
+def spectrum_confidence(spectrum: np.ndarray, half_window_deg: float = 90.0) -> float:
+    """주엽이 '반대편 경쟁 봉우리'보다 얼마나 우월한가 = peak / 반대편_max. (순수 numpy)
+
+    peak/평균은 작은 어레이(넓은 주엽)에선 1 부근에 몰려 둔감하다. 대신 주엽 중심
+    ±half_window_deg 를 제외한 **반대편 반원의 최대치**와 비교한다:
+      · 한 방향만 뚜렷(넓어도) → 반대편 낮음 → 값이 큼(확신).
+      · ±180° 반사로 반대편에 맞먹는 봉우리(튐 위험) → 1 부근(불확실).
+    바닥(min)을 빼서 SRP 맵의 DC 오프셋에 무관하게 만든다.
+    `doa.diag` 의 conf 와 동일 지표 → 이 값으로 config.CONF_MIN 을 튜닝한다.
+    """
+    s = np.asarray(spectrum, dtype=float)
+    n = s.size
+    if n == 0:
+        return 0.0
+    s = s - float(s.min())                  # 바닥 제거 (오프셋 무관)
+    peak = float(s.max())
+    if peak <= 0.0:
+        return 0.0
+    k = int(np.argmax(s))
+    half = max(1, int(round(half_window_deg / (360.0 / n))))
+    offset = (np.arange(n) - k) % n
+    opposite = (offset > half) & (offset < n - half)   # 주엽 ±half 를 뺀 반대편 반원
+    eps = peak * 1e-3                        # 0 분모 방지 + 단일 봉우리 상한(~1000)
+    if not opposite.any():
+        return float(peak / eps)            # 비교 대상 없음 → 사실상 단일, 매우 확신
+    opp_max = float(s[opposite].max())
+    return float(peak / (opp_max + eps))
+
+
 def spatial_spectrum(
     raw4: np.ndarray,
     fs: int = FS_DEFAULT,
@@ -151,7 +180,8 @@ def estimate_multiple_directions(
     min_sep_deg: float = 30.0,
     radius_m: float = MIC_RADIUS_M,
     algo: str = "SRP",
-) -> List[Tuple[float, Direction]]:
+    with_confidence: bool = False,
+):
     """raw 4채널 → [(방위각, Direction), ...] 동시 여러 방향.
 
     각도는 추정 raw 방위각이며, `angle_to_direction` 으로 4방향 매핑한다.
@@ -159,6 +189,9 @@ def estimate_multiple_directions(
 
     algo: 'SRP'(기본) 또는 'MUSIC'. 다중 음원 분리는 MUSIC 이 더 정확하나
           num_src 정확도에 민감하다. 4-mic 어레이는 최대 3개(num_src≤3)까지가 한계.
+
+    with_confidence=True 면 `(results, confidence)` 를 돌려준다 (confidence=주엽 우월도,
+    시간 게이팅용). 기본 False 는 기존대로 results 리스트만 반환(하위 호환).
     """
     az, spec = spatial_spectrum(
         raw4, fs=fs, nfft=nfft, freq_range=freq_range,
@@ -168,7 +201,10 @@ def estimate_multiple_directions(
         spec, az, max_src=num_src,
         height_ratio=height_ratio, min_sep_deg=min_sep_deg,
     )
-    return [(a, angle_to_direction(a)) for a in angles]
+    results = [(a, angle_to_direction(a)) for a in angles]
+    if with_confidence:
+        return results, spectrum_confidence(spec)
+    return results
 
 
 def find_respeaker_device(sd) -> Optional[int]:
