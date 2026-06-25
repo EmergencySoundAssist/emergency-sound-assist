@@ -68,20 +68,35 @@ def angle_to_direction(raw_deg: float) -> Direction:
     return Direction.FRONT  # 315~360 또는 0~45 (차량 기준 전방)
 
 
+_read_warned = False  # USB 읽기 실패 경고를 한 번만 출력
+
+
 def _read_respeaker_angle() -> Optional[float]:
     """ReSpeaker XVF-3000 의 자체 DoA 값(0~359°)을 읽는다.
 
-    아래 세 경우 모두 None 반환 (노트북 단계 정상 경로):
+    아래 경우 모두 None 반환 (노트북 단계 정상 경로):
         · pyusb / respeaker_tuning import 실패
         · USB 장치 미감지 (마이크 안 꽂힘)
-        · ※ 실물 검증은 Jetson 단계에서 처음 이뤄짐
+
+    단, **장치는 찾았는데 제어 전송이 실패**(USB 권한/libusb)하면 침묵하지 않고
+    stderr 로 한 번 경고한 뒤 None 을 돌려준다 — Jetson 의 'angle=None' 침묵 블로커 대응.
     """
+    global _read_warned
     if not _RESPEAKER_LIB_AVAILABLE:
         return None
-    mic = _respeaker_find()          # 장치 못 찾으면 None 반환
-    if mic is None:
+    try:
+        mic = _respeaker_find()      # 장치 못 찾으면 None 반환
+        if mic is None:
+            return None
+        return float(mic.direction)
+    except Exception as e:           # USBError(권한) / NoBackendError(libusb) 등
+        if not _read_warned:
+            import sys
+            print(f"[doa] ReSpeaker 방향 읽기 실패: {e}\n"
+                  f"      → USB 권한(udev 99-respeaker.rules) 또는 libusb 설치 확인 "
+                  f"(docs/doa/jetson.md)", file=sys.stderr)
+            _read_warned = True
         return None
-    return float(mic.direction)
 
 
 def estimate_direction(
