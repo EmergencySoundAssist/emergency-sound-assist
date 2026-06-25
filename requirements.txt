@@ -1,14 +1,12 @@
-# emergency-sound-assist 의존성
-# 권장: Jetson(JetPack)과 동일한 Python 3.10 환경 사용
-#   conda create -n airacle python=3.10 -y && conda activate airacle
-#   pip install -r requirements.txt
-
-# 런타임
-numpy>=1.24
-scipy>=1.10
-sounddevice>=0.4          # ReSpeaker 6채널 오디오 캡처
-pyusb>=1.2               # ReSpeaker USB 제어 — 자체 DoA 폴링 (doa/respeaker_tuning.py)
-pyroomacoustics>=0.7     # 다중 음원 방향추정 SRP-PHAT/MUSIC (doa/multi_source.py)
-
-# 개발
-pytest>=7.0
+# 의존성 정의는 pyproject.toml 에서 관리합니다. 이 파일은 '전체 개발 환경' 설치 편의용.
+#
+# 설치 (Mac/일반):
+#   python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
+#   pip install -e .                  # 경량(방향): numpy, pyusb
+#   pip install -e ".[multisource]"   # + 다중음원 SRP/MUSIC: scipy, sounddevice, pyroomacoustics
+#   pip install -e ".[dev]"           # + 테스트: pytest
+#
+# ⚠️ Jetson(JetPack/aarch64)은 conda 불가 → 반드시 venv. 상세 절차/시스템 패키지: docs/doa/jetson.md
+#
+# 아래 한 줄은 '전체 개발 환경'(다중음원 + 테스트)을 한 번에 설치한다.
+-e .[multisource,dev]

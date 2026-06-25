@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emergency-sound-assist"
+version = "0.1.0"
+description = "청각장애 운전자용 긴급음 감지·방향(DoA)·접근 알림 시스템"
+readme = "README.md"
+requires-python = ">=3.9"
+# 경량(방향) 런타임 기본 의존성 — Jetson 경량 경로(doa.live: XVF 자체 DoA)는 이것만으로 동작.
+#   numpy: 신호/배열,  pyusb: ReSpeaker USB 제어(방향 레지스터·LED).  ※ pyusb 는 libusb 백엔드 필요(apt).
+dependencies = [
+    "numpy>=1.24",
+    "pyusb>=1.2",
+]
+
+[project.optional-dependencies]
+# 다중 음원(SRP/MUSIC) 경로 — doa.multi_live / doa.diag / doa.multi_source.spatial_spectrum.
+#   pyroomacoustics 는 ARM(aarch64)에서 소스 빌드가 무거울 수 있음(docs/doa/jetson.md 참고).
+multisource = [
+    "scipy>=1.10",
+    "sounddevice>=0.4",       # PortAudio 필요(apt libportaudio2)
+    "pyroomacoustics>=0.7",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+# 설치(pip install -e .) 후 CWD 와 무관하게 실행 가능 — `python -m doa.x` 의 'repo 루트에서만' 제약 해소.
+doa-live = "doa.live:main"            # 경량: 자체 DoA 방향만
+doa-multilive = "doa.multi_live:main" # 다중 음원 + LED + 스무딩
+doa-diag = "doa.diag:main"            # 단일 음원 진단/보정
+
+[tool.setuptools]
+# flat 레이아웃: 기존 top-level 패키지를 그대로 선언 (src/ 이동 없음 — 팀원 브랜치 머지 보호).
+packages = ["core", "doa", "audio", "approach", "classifier"]
