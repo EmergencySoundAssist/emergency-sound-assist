@@ -1,0 +1,33 @@
+# EmergencySoundAssist 런타임 의존성
+# 설치:  pip install -r requirements.txt
+#
+# 현재 런타임(분류 placeholder + 도플러 + 파이프라인)은 numpy만으로 동작한다.
+# 오디오 입력은 모드별로 필요한 것만 설치하면 된다(둘 다 지연 import).
+
+# ── 필수 (코어 신호처리: 도플러·멜·FFT) ─────────────────
+numpy>=1.24
+
+# ── 오디오 입력 ────────────────────────────────────────
+# --mic (실시간 마이크): sounddevice  ※ 시스템 패키지 libportaudio2 필요
+#                        (Ubuntu/Jetson: sudo apt install libportaudio2)
+# --wav (파일 처리)    : soundfile
+sounddevice>=0.4
+soundfile>=0.12
+
+# ── 검출 모델 추론 (classifier 진짜 연결 후 활성화) ───────
+# 지금은 placeholder 휴리스틱이라 불필요. 학습 모델(.pt/.onnx) 연결 시 아래에서 택1:
+#
+#  (A) PyTorch .pt 직접 로드 — 개발 PC/노트북 검증용
+# torch>=2.1
+#
+#  (B) ONNX 런타임 — 가벼운 추론
+# onnxruntime>=1.17           # CPU
+# onnxruntime-gpu>=1.17       # GPU(CUDA)
+#
+#  ※ Jetson(보드) 주의:
+#     - TensorRT는 JetPack에 기본 포함 → pip 설치 X (trtexec로 .engine 변환)
+#     - torch / onnxruntime-gpu 는 NVIDIA 전용 aarch64 빌드 사용 (일반 pip 아님)
+#       → NVIDIA Jetson용 휠/문서 참고
+
+# 참고: scipy는 현재 런타임에서 사용하지 않음(numpy.fft로 충분).
+#       ViT-CNN-Attention(학습 레포)에서만 scipy가 필요하며 보드에는 올리지 않는다.
