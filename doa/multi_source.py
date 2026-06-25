@@ -23,19 +23,18 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from core.types import Direction
+from doa import config
 from doa.estimator import angle_to_direction
 
 # ---------------------------------------------------------------------------
-# 마이크 어레이 기하 (보드: MIC1~4 = 원 위 45/135/225/315°)
+# 마이크 어레이 기하 / 신호 — 값은 doa/config.py 에서 관리
 # ---------------------------------------------------------------------------
-# TODO(확인): ReSpeaker 4-mic 어레이 반지름(m)을 데이터시트/PCB 실측으로 확정할 것.
-MIC_RADIUS_M = 0.046
-MIC_ANGLES_DEG = (45.0, 135.0, 225.0, 315.0)  # MIC1, MIC2, MIC3, MIC4
-
-FS_DEFAULT = 16000
-NFFT_DEFAULT = 512
-SIREN_BAND_HZ = (500.0, 1500.0)
-SPEED_OF_SOUND = 343.0
+MIC_RADIUS_M = config.MIC_RADIUS_M
+MIC_ANGLES_DEG = config.MIC_ANGLES_DEG  # MIC1~4 배치각
+FS_DEFAULT = config.FS
+NFFT_DEFAULT = config.NFFT
+SIREN_BAND_HZ = config.SIREN_BAND_HZ
+SPEED_OF_SOUND = config.SPEED_OF_SOUND
 
 
 def mic_locations(

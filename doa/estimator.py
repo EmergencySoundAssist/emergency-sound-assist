@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Optional
 
 from core.types import AudioChunk, Direction, DirectionResult
+from doa import config
 
 # ---------------------------------------------------------------------------
 # ReSpeaker 의존성 (있으면 쓰고, 없으면 조용히 비활성화)
@@ -27,15 +28,14 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# 보드 장착 보정 (실측으로 확정 — docs/doa/direction-mapping.md 4절 참고)
+# 보드 장착 보정 — 값은 doa/config.py 에서 관리 (docs/doa/direction-mapping.md 참고)
 # ---------------------------------------------------------------------------
 # ReSpeaker raw DOA 규약: 0°=보드 우측, 반시계(CCW) 증가 (보드 인쇄 0/90/180/270).
 # 케이블이 가리키는 방향을 '후방'으로 삼아 차량 기준으로 재정렬한다.
 #   REAR_RAW_DEG : 케이블이 가리키는 raw 각도. 후방(180°)에 맞춘다.
 #   MIRROR       : 좌/우 반전 보정. 실측에서 좌우 반대로 나오면 토글.
-# TODO(보정): 차량 장착 상태에서 4방향 실측 후 아래 두 값을 확정할 것.
-REAR_RAW_DEG = 270.0
-MIRROR = True
+REAR_RAW_DEG = config.REAR_RAW_DEG
+MIRROR = config.MIRROR
 
 
 def _to_vehicle_angle(raw_deg: float) -> float:
