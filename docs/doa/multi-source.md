@@ -21,6 +21,7 @@ raw 4채널 → STFT → SRP-PHAT 공간 스펙트럼 → 다중 peak 추출 →
 | `spatial_spectrum()` | raw → (방위각 그리드, 에너지) | **pyroomacoustics** |
 | `pick_peaks()` | 스펙트럼에서 봉우리 여러 개 | numpy/scipy |
 | `spectrum_confidence()` | 주엽 우월도(주엽÷반대편 반원 최대) — 신뢰도 게이팅 지표 | numpy |
+| `drop_opposite_phantom()` | primary 기준 ~180° 반대편 가짜 2번째(전후 유령) 제거 | numpy |
 | `estimate_multiple_directions()` | 위를 묶어 `[(각도, Direction)]` (`with_confidence=True` 면 `(results, conf)`) | pyroomacoustics |
 | `capture_raw4()` | ReSpeaker ch1~4 캡처 | sounddevice |
 
@@ -46,8 +47,10 @@ pip install -e ".[multisource]"   # scipy, sounddevice, pyroomacoustics (pyproje
 ```
 
 ## 한계 (4-mic 소형 어레이)
-- 분리 가능한 동시 음원은 **현실적으로 ~2개**. 그 이상은 신뢰도 급락.
-- 단일 음원에 `--num`을 2로 두면 **±180° 유령 2번째 peak**가 뜨므로, MVP 기본은 `config.NUM_SRC=1`.
+- 분리 가능한 동시 음원은 **현실적으로 ~2개**. 그 이상은 신뢰도 급락. 같은 대역(사이렌+사이렌)은 분리 거의 불가, 음색이 다르면(사이렌+경적) 유리.
+- 단일 음원에 `--num 2`를 두면 **±180° 유령 2번째 peak**가 뜨는데, `drop_opposite_phantom`
+  (config.PHANTOM_TOL_DEG)이 자동 제거 → 다중을 켜도 단일은 1개로 깔끔. MVP 기본은 신뢰성 위해 `config.NUM_SRC=1`.
+  기본을 다중으로 하려면 `NUM_SRC=2 + ALGO="MUSIC"` 두 줄.
 - 두 소리가 **각도/주파수로 충분히 떨어져야** 분리됨.
 - 연산량↑ → pyroomacoustics 는 ARM(Jetson)에서 빌드 무거움 ([jetson.md](./jetson.md)).
 

@@ -47,9 +47,13 @@ python -m doa.multi_source     # 1초 캡처 → 동시 여러 방향 출력 (py
 python -m doa.multi_live                              # 기본 (단일 음원 + 스무딩)
 python -m doa.multi_live --led                        # + LED 링 점등
 python -m doa.multi_live --no-smooth                  # 스무딩 끄고 옛 즉시반응과 비교
-python -m doa.multi_live --num 2 --algo music         # 동시 2개 (MUSIC)
+python -m doa.multi_live --num 2 --algo music         # 동시 2개 (MUSIC) — 유령 자동 제거
 python -m doa.multi_live --device 2                   # 입력 장치 인덱스 직접 지정
 ```
+> **다중 감지**: 기본은 단일(`NUM_SRC=1`, 신뢰성·Jetson 가벼움). `--num 2 --algo music` 으로 켜면
+> primary 기준 ~180° 가짜 2번째(전후 유령)는 자동 제거(`PHANTOM_TOL_DEG`)된다. 항상 다중으로
+> 쓰려면 `config.py` 의 `NUM_SRC=2`, `ALGO="MUSIC"` 두 줄만 바꾸면 됨. 단 4-mic라 동시 분리는
+> best-effort(같은 대역 사이렌끼리는 못 가름).
 
 ### 하드웨어 없이 검증 — `--demo`
 ReSpeaker 없이 **합성 음원**으로 전체 파이프라인(SRP + 스무딩 + 매핑)을 돌린다. 새 기기(특히

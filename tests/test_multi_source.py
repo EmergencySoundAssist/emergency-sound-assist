@@ -8,7 +8,12 @@ SRP-PHAT 본체(spatial_spectrum)는 pyroomacoustics 의존이라 여기서 다�
 import numpy as np
 import pytest
 
-from doa.multi_source import mic_locations, pick_peaks, spectrum_confidence
+from doa.multi_source import (
+    drop_opposite_phantom,
+    mic_locations,
+    pick_peaks,
+    spectrum_confidence,
+)
 
 AZ = np.arange(360.0)  # 1° 간격 방위각 그리드
 
@@ -151,6 +156,16 @@ def test_synth_array_signal_shape_and_directional():
     assert sig.dtype == np.float32
     # 방향성 → 채널 간 도착 시간차로 파형이 서로 달라야 함
     assert not np.allclose(sig[:, 0], sig[:, 1])
+
+
+def test_drop_opposite_phantom():
+    """primary 기준 ~180° 반대편 2번째(전후 유령)는 제거, 옆쪽 진짜 2번째는 유지."""
+    assert drop_opposite_phantom([90]) == [90]              # 단일은 그대로
+    assert drop_opposite_phantom([]) == []
+    assert drop_opposite_phantom([90, 271], tol_deg=40) == [90]   # ~180° → 유령 제거
+    assert drop_opposite_phantom([90, 250], tol_deg=40) == [90]   # 160° (|160-180|=20<40) → 제거
+    assert drop_opposite_phantom([90, 180], tol_deg=40) == [90, 180]  # 90° 옆 → 유지
+    assert drop_opposite_phantom([90, 0], tol_deg=40) == [90, 0]      # 90° 옆 → 유지
 
 
 def test_synth_end_to_end_recovers_angle():

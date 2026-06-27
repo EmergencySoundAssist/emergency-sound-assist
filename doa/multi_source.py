@@ -35,6 +35,26 @@ FS_DEFAULT = config.FS
 NFFT_DEFAULT = config.NFFT
 SIREN_BAND_HZ = config.SIREN_BAND_HZ
 SPEED_OF_SOUND = config.SPEED_OF_SOUND
+PHANTOM_TOL_DEG = config.PHANTOM_TOL_DEG
+
+
+def drop_opposite_phantom(angles_deg: List[float], tol_deg: float = PHANTOM_TOL_DEG) -> List[float]:
+    """primary(첫 원소=최강) 기준 ~180° 반대편 부엽(전후 유령)을 2번째 이후에서 제거. (순수)
+
+    소형 4-mic 어레이에서 단일 음원이 반대편에 만드는 **가짜 2번째 peak**를 걸러,
+    다중 모드에서도 단일 음원은 화살표 1개로 깔끔하게 한다. 진짜로 옆쪽(≁180°)에 있는
+    2번째 음원은 남긴다. (입력은 에너지 내림차순 가정 — pick_peaks 출력)
+    """
+    a = [float(x) for x in angles_deg]
+    if len(a) <= 1:
+        return a
+    primary = a[0]
+    kept = [primary]
+    for x in a[1:]:
+        d = abs((x - primary + 180.0) % 360.0 - 180.0)   # 0~180 원형거리
+        if abs(d - 180.0) > tol_deg:                      # 180°에서 충분히 떨어진 것만 진짜 2번째
+            kept.append(x)
+    return kept
 
 
 def mic_locations(
@@ -181,6 +201,7 @@ def estimate_multiple_directions(
     radius_m: float = MIC_RADIUS_M,
     algo: str = "SRP",
     with_confidence: bool = False,
+    phantom_tol_deg: Optional[float] = PHANTOM_TOL_DEG,
 ):
     """raw 4채널 → [(방위각, Direction), ...] 동시 여러 방향.
 
@@ -192,6 +213,9 @@ def estimate_multiple_directions(
 
     with_confidence=True 면 `(results, confidence)` 를 돌려준다 (confidence=주엽 우월도,
     시간 게이팅용). 기본 False 는 기존대로 results 리스트만 반환(하위 호환).
+
+    phantom_tol_deg 가 설정되면(기본 config.PHANTOM_TOL_DEG) primary 기준 ~180° 반대편의
+    가짜 2번째 peak(전후 유령)를 제거한다 → 다중 모드에서도 단일 음원은 1개로 깔끔. None 이면 끔.
     """
     az, spec = spatial_spectrum(
         raw4, fs=fs, nfft=nfft, freq_range=freq_range,
@@ -201,6 +225,8 @@ def estimate_multiple_directions(
         spec, az, max_src=num_src,
         height_ratio=height_ratio, min_sep_deg=min_sep_deg,
     )
+    if phantom_tol_deg is not None and len(angles) > 1:
+        angles = drop_opposite_phantom(angles, phantom_tol_deg)   # ~180° 유령 2번째 제거
     results = [(a, angle_to_direction(a)) for a in angles]
     if with_confidence:
         return results, spectrum_confidence(spec)
