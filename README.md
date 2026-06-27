@@ -30,8 +30,8 @@ docs/         설계 문서  → docs/README.md
 ## 설치 / 실행 (DoA)
 ```bash
 python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-pip install -e ".[multisource,dev]"   # 경량만: pip install -e .
-python -m doa.multi_live --led        # 실시간 방향 + LED
+pip install -r requirements.txt       # 의존성 설치
+python -m doa.multi_live --led        # 실시간 방향 + LED (레포 루트에서)
 python -m pytest -q                   # 테스트
 ```
 실행 옵션 → [docs/doa/running.md](docs/doa/running.md) · Jetson 배포 → [docs/doa/jetson.md](docs/doa/jetson.md)

@@ -12,16 +12,15 @@
 
 ## 0. 환경 (최초 1회 + 작업 시작 시)
 ```bash
-# 최초 1회 (Mac/일반) — 의존성은 pyproject.toml 로 관리
+# 최초 1회 (Mac/일반)
 python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-pip install -e ".[multisource,dev]"   # 다중음원 + 테스트 포함 (전체 개발 환경)
-#   경량(방향만): pip install -e .          → numpy, pyusb 만
+pip install -r requirements.txt       # 의존성 설치
 #   ※ Jetson(aarch64)은 conda 불가 → 위 venv 사용. 상세: jetson.md
 
 # 작업 시작할 때마다
 source .venv/bin/activate
 ```
-설치 후엔 `python -m doa.x` 대신 **콘솔 스크립트**(`doa-live`/`doa-multilive`/`doa-diag`)로도 실행 가능(CWD 무관).
+실행은 **레포 루트에서 `python -m doa.<모듈>`** (모듈 실행 — `python doa/live.py` 는 import 깨짐).
 
 ## 1. 테스트 (하드웨어 불필요)
 ```bash
@@ -113,7 +112,7 @@ python -m doa.led_ring         # LED 한 칸씩 회전 — 링 동작 확인
 ## 트러블슈팅
 | 증상 | 해결 |
 |---|---|
-| `No module named ...` | venv 활성화(`source .venv/bin/activate`) + `pip install -e .` 했는지. 설치하면 CWD 무관 |
+| `No module named ...` | venv 활성화(`source .venv/bin/activate`) + `pip install -r requirements.txt` 했는지. **레포 루트에서 `python -m doa.x`** 로 실행했는지 |
 | `Invalid number of channels` | 기본 입력이 ReSpeaker가 아님 → 자동 탐지하지만 `sd.query_devices()`로 6채널 장치 확인 |
 | 계속 `방향 불확실` | `--conf-min 0` 으로 conf 분포 보고 임계 조정. 단일 음원이면 `--num 1` (유령 2번째 제거) |
 | 방향이 ±180° 반대로 튐 | 스무딩이 억제(기본 ON). 그래도 심하면 `--conf-min` 올리고, 단일 음원은 `--num 1` |

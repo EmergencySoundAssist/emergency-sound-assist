@@ -4,11 +4,11 @@
 
 세 단계로 위험을 줄인다 — **하드웨어 없이 먼저(데모) → 실물 오디오(udev 불필요) → (옵션) 경량 XVF(udev 필요).**
 
-| 경로 | 명령 | 하드웨어 | udev | 추가 의존성 |
+| 경로 | 명령 (레포 루트에서) | 하드웨어 | udev | 추가 의존성 |
 |------|------|----------|------|------------|
-| **데모(검증)** | `doa-multilive --demo` | ❌ 불필요 | ❌ | pyroomacoustics |
-| **오디오 SRP/MUSIC (주)** | `doa-multilive --no-led` | ReSpeaker | ❌ | pyroomacoustics + libportaudio2 |
-| **경량 XVF (옵션)** | `doa-live` | ReSpeaker | ✅ **필요** | 가벼움(pyusb) |
+| **데모(검증)** | `python -m doa.multi_live --demo` | ❌ 불필요 | ❌ | pyroomacoustics |
+| **오디오 SRP/MUSIC (주)** | `python -m doa.multi_live --no-led` | ReSpeaker | ❌ | pyroomacoustics + libportaudio2 |
+| **경량 XVF (옵션)** | `python -m doa.live` | ReSpeaker | ✅ **필요** | pyusb |
 
 > ⚠️ **conda 금지.** JetPack/aarch64 에선 Anaconda 가 맞지 않는다. 반드시 `python3 -m venv` 사용.
 > 방향만 필요하고 LED를 안 쓰면 **오디오 경로(udev 불필요)** 로 충분하다 — 다른 분류/접근 브랜치가
@@ -29,14 +29,14 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
 sudo apt install -y libportaudio2          # sounddevice(오디오) 런타임
 # pyroomacoustics 가 소스 빌드로 떨어질 수 있어 빌드 도구 미리:
 sudo apt install -y build-essential python3-dev
-pip install -e ".[multisource]"            # numpy, scipy, sounddevice, pyroomacoustics
+pip install -r requirements.txt            # numpy, scipy, sounddevice, pyroomacoustics, pyusb
 ```
 > pyroomacoustics aarch64 휠이 없어 빌드가 오래/실패하면, scipy 가 먼저 import 되는지 확인하고
 > piwheels/JetPack 제공 휠을 우선 사용한다.
 
 ## 2. 하드웨어 없이 먼저 검증 (장치·udev 불필요)
 ```bash
-python -m doa.multi_live --demo            # 또는 doa-multilive --demo
+python -m doa.multi_live --demo
 ```
 합성 음원을 한 바퀴 돌리며 입력각 vs 추정각을 출력하고, 끝에 `N/48 프레임 오차 ≤10°` 를 보여준다.
 **이게 통과하면 "설치(pyroomacoustics aarch64 포함)·SRP 연산이 이 Jetson에서 동작"** 이 확인된 것 —
@@ -61,7 +61,7 @@ echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0018", MODE=
 sudo udevadm control --reload-rules && sudo udevadm trigger
 # ReSpeaker 재플러그 후:
 lsusb | grep 2886        # 2886:0018 보이면 인식 OK
-python -m doa.live       # 또는 doa-live
+python -m doa.live
 ```
 
 ### 트러블슈팅 — `장치 없음` / `angle=None`
@@ -75,8 +75,8 @@ python -m doa.live       # 또는 doa-live
 ```ini
 [Service]
 WorkingDirectory=/home/<user>/emergency-sound-assist
-ExecStart=/home/<user>/emergency-sound-assist/.venv/bin/doa-multilive --no-led
+ExecStart=/home/<user>/emergency-sound-assist/.venv/bin/python -m doa.multi_live --no-led
 Restart=on-failure
 ```
-`pip install -e .` 로 설치돼 있으면 `doa-multilive`(console script)가 CWD 와 무관하게 동작하므로
-`python -m doa.x` 의 '레포 루트에서만' 제약을 피할 수 있다.
+모듈 실행은 **CWD 의존**이라 `WorkingDirectory` 를 반드시 레포 루트로 지정한다
+(`python -m doa.x` 는 그 위치에서만 `core`/`doa` import 가 해결됨).

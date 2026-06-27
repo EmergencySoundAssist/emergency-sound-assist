@@ -1,12 +1,18 @@
-# 의존성 정의는 pyproject.toml 에서 관리합니다. 이 파일은 '전체 개발 환경' 설치 편의용.
-#
-# 설치 (Mac/일반):
-#   python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-#   pip install -e .                  # 경량(방향): numpy, pyusb
-#   pip install -e ".[multisource]"   # + 다중음원 SRP/MUSIC: scipy, sounddevice, pyroomacoustics
-#   pip install -e ".[dev]"           # + 테스트: pytest
-#
-# ⚠️ Jetson(JetPack/aarch64)은 conda 불가 → 반드시 venv. 상세 절차/시스템 패키지: docs/doa/jetson.md
-#
-# 아래 한 줄은 '전체 개발 환경'(다중음원 + 테스트)을 한 번에 설치한다.
--e .[multisource,dev]
+# emergency-sound-assist — DoA(방향추정) 의존성
+# 설치: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+#   ※ Jetson(JetPack/aarch64)은 conda 불가 → venv 사용. 상세: docs/doa/jetson.md
+#   ※ 실행은 레포 루트에서 `python -m doa.multi_live` (모듈 실행)
+
+# ── 공통 ─────────────────────────────────────────
+numpy>=1.24
+
+# ── 다중 음원 SRP/MUSIC (multi_live / diag / multi_source) ──
+scipy>=1.10
+sounddevice>=0.4          # 오디오 캡처  ※ Ubuntu/Jetson: sudo apt install libportaudio2
+pyroomacoustics>=0.7      # SRP-PHAT / MUSIC 공간 스펙트럼
+
+# ── ReSpeaker USB 제어 (자체 DoA 레지스터 + LED) ──
+pyusb>=1.2               # ※ libusb 백엔드 필요: brew install libusb / apt install libusb-1.0-0
+
+# ── 개발 ─────────────────────────────────────────
+pytest>=7.0

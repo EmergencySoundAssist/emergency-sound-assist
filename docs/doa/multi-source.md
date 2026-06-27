@@ -43,7 +43,7 @@ raw 4채널 → STFT → SRP-PHAT 공간 스펙트럼 → 다중 peak 추출 →
 
 ## 설치
 ```bash
-pip install -e ".[multisource]"   # scipy, sounddevice, pyroomacoustics (pyproject extras)
+pip install -r requirements.txt   # numpy, scipy, sounddevice, pyroomacoustics, pyusb
 ```
 
 ## 한계 (4-mic 소형 어레이)
