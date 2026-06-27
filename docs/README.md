@@ -12,6 +12,7 @@ EmergencySoundAssist 설계 문서 목차.
 - [① 소리 분류 (classifier)](classifier/design.md) — 담당: 나
 - [② 방향 추정 (doa)](doa/design.md) — 담당: 팀원
 - [③ 접근/멀어짐 (approach)](approach/design.md) — 담당: 팀원
+- [④ STT 음성→텍스트 (stt)](stt/design.md) · [Jetson 배포·의존성](stt/jetson.md) — 담당: 천자민 *(MVP 외 확장)*
 
 ---
 규칙: **모듈 전용 문서 = 하위폴더 / 여러 모듈 공통 = docs/ 루트.**

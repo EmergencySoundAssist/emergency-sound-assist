@@ -40,3 +40,10 @@
 
 ## 접근 판단
 - **도플러 효과(Doppler)**: 음원이 다가오면 주파수↑, 멀어지면 주파수↓.
+
+## STT (음성→텍스트)
+- **STT(Speech-To-Text)**: 음성을 텍스트로 바꾸는 것. 우리는 faster-whisper 로 주변 말을 글자로 보여 준다.
+- **VAD(Voice Activity Detection)**: '지금 말소리가 있나?' 판단. 조용하면 STT 엔진을 안 돌려 연산을 아낀다(우리는 RMS 에너지 임계값으로 간단 구현).
+- **RMS(에너지)**: 신호 크기의 평균적 세기. 클수록 소리가 큼. 무음 판단에 사용.
+- **발화(Utterance)**: 한 번에 이어지는 말 단위. 1초 청크는 짧아서, 말이 이어지는 동안 모아 발화 단위로 인식한다.
+- **faster-whisper**: OpenAI Whisper 의 경량·고속 구현(CTranslate2 기반). 오프라인·CPU 동작, Jetson 이식 가능.

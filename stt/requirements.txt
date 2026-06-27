@@ -1,0 +1,18 @@
+# EmergencySoundAssist — stt(④ 음성→텍스트) 의존성  [노트북/CPU 개발용]
+# 설치: pip install -r stt/requirements.txt
+#
+# ⚠️ Jetson(보드)에는 이걸 그대로 쓰지 말 것.
+#    - faster-whisper 는 onnxruntime(CPU) 과 ctranslate2(CPU 휠) 를 끌어와
+#      approach 의 onnxruntime-gpu / CUDA ctranslate2 를 덮어쓴다(충돌).
+#    - Jetson 설치 순서·--no-deps·numpy 핀은 → docs/stt/jetson.md 참고.
+
+# ===== STT 엔진 =====
+# faster-whisper: 오프라인·CPU 동작·한국어 지원. 백엔드 CTranslate2.
+# (노트북 aarch64/x86 모두 PyPI CPU 휠로 바로 설치됨)
+faster-whisper
+
+# ===== 공통 오디오 =====
+# numpy 는 핀하지 않음(다른 모듈과 맞춤). Jetson 에선 NVIDIA 휠에 맞춰 1.x 로 핀 필요.
+numpy
+soundfile             # WAV 파일 로드 (stt.run --wav)
+sounddevice           # 마이크 실시간 입력 (stt.run --mic, 선택)

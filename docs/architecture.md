@@ -27,6 +27,7 @@
 | ① | 소리 분류 | `classifier/` | [classifier/design.md](classifier/design.md) | 나 |
 | ② | 방향 추정 | `doa/` | [doa/design.md](doa/design.md) | 팀원 |
 | ③ | 접근/멀어짐 | `approach/` | [approach/design.md](approach/design.md) | 팀원 |
+| ④ | STT 음성→텍스트 | `stt/` | [stt/design.md](stt/design.md) | 천자민 *(MVP 외 확장)* |
 | - | 통합 | `pipeline/` | - | 공통 |
 
 - 세 모듈은 **`core/types.py`의 데이터 약속**으로 연결 → [interfaces.md](interfaces.md)
