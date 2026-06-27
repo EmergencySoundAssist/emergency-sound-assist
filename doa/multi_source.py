@@ -207,6 +207,44 @@ def estimate_multiple_directions(
     return results
 
 
+def synth_array_signal(
+    angle_deg: float,
+    seconds: float = 0.4,
+    fs: int = FS_DEFAULT,
+    f_hz: float = 900.0,
+    radius_m: float = MIC_RADIUS_M,
+    angles_deg: Tuple[float, ...] = MIC_ANGLES_DEG,
+    snr_db: float = 20.0,
+    seed: int = 0,
+    _sign: float = 1.0,
+) -> np.ndarray:
+    """far-field 평면파 가정으로 방위각 `angle_deg` 음원의 4채널 신호를 합성. (순수 numpy)
+
+    하드웨어(ReSpeaker) 없이 SRP/MUSIC 파이프라인을 시연·검증하기 위한 용도
+    (`doa.multi_live --demo`). 마이크 기하는 `mic_locations` 와 동일하게 두고,
+    마이크별 도착 시간차(TDOA)를 FFT 위상 시프트로 부여한다. `f_hz` 는 사이렌 대역의 톤.
+    """
+    n = max(8, int(seconds * fs))
+    rng = np.random.default_rng(seed)
+    t = np.arange(n) / fs
+    s = np.sin(2 * np.pi * f_hz * t)                       # 사이렌 대역 톤
+
+    mics = mic_locations(radius_m, angles_deg)             # (2, M)
+    u = np.array([np.cos(np.deg2rad(angle_deg)), np.sin(np.deg2rad(angle_deg))])
+    tau = _sign * (mics[0] * u[0] + mics[1] * u[1]) / SPEED_OF_SOUND  # (M,) 마이크별 지연
+
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    S = np.fft.rfft(s)
+    out = np.empty((n, mics.shape[1]), dtype="float32")
+    for i in range(mics.shape[1]):
+        shifted = np.fft.irfft(S * np.exp(1j * 2 * np.pi * freqs * tau[i]), n=n)
+        sp = np.mean(shifted ** 2) + 1e-12
+        noise = rng.standard_normal(n)
+        noise *= np.sqrt(sp / (10 ** (snr_db / 10)) / (np.mean(noise ** 2) + 1e-12))
+        out[:, i] = (shifted + noise).astype("float32")
+    return out
+
+
 def find_respeaker_device(sd) -> Optional[int]:
     """입력 6채널 이상이면서 이름에 'respeaker' 가 있는 장치 인덱스를 찾는다."""
     for i, dev in enumerate(sd.query_devices()):

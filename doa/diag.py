@@ -70,13 +70,15 @@ def main() -> None:
                          f"(MUSIC 에서 특히 중요, config={config.NUM_SRC})")
     ap.add_argument("--led", action="store_true",
                     help="추정한 raw 방향을 LED 링에 점등 (소리 위치 vs 불 위치로 (B) 육안 확인)")
+    ap.add_argument("--device", type=int, default=None,
+                    help="입력 장치 인덱스 (미지정 시 자동 탐지). sd.query_devices() 로 확인")
     args = ap.parse_args()
 
     import sounddevice as sd
 
-    dev = find_respeaker_device(sd)
+    dev = args.device if args.device is not None else find_respeaker_device(sd)
     if dev is None:
-        print("ReSpeaker(6채널)를 못 찾음. sd.query_devices() 확인.")
+        print("ReSpeaker(6채널)를 못 찾음. sd.query_devices() 로 확인 후 --device 인덱스 지정.")
         return
 
     ring = None

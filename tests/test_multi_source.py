@@ -138,3 +138,28 @@ def test_conf_offset_invariant():
 def test_conf_negative_input_guarded():
     """음수만 든 비정상 입력에서도 안전(크래시·음수 반환 없음). 바닥 제거 후 peak=0 → 0.0."""
     assert spectrum_confidence(np.array([-1.0, -1.0, -1.0])) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# synth_array_signal — 하드웨어 없는 데모/검증용 합성 신호 (순수 numpy)
+# ---------------------------------------------------------------------------
+
+def test_synth_array_signal_shape_and_directional():
+    from doa.multi_source import synth_array_signal
+    sig = synth_array_signal(90, seconds=0.1, fs=16000)
+    assert sig.shape == (1600, 4)
+    assert sig.dtype == np.float32
+    # 방향성 → 채널 간 도착 시간차로 파형이 서로 달라야 함
+    assert not np.allclose(sig[:, 0], sig[:, 1])
+
+
+def test_synth_end_to_end_recovers_angle():
+    """합성 음원 → 전체 SRP 파이프라인이 입력 방위각을 복원 (pyroomacoustics 있을 때만)."""
+    pytest.importorskip("pyroomacoustics")
+    from doa.multi_source import synth_array_signal, estimate_multiple_directions
+    for true in (30, 120, 210, 300):
+        res = estimate_multiple_directions(synth_array_signal(true), num_src=1)
+        assert res, f"{true}°: peak 없음"
+        est = res[0][0]
+        off = abs((est - true + 180) % 360 - 180)
+        assert off <= 12, f"true={true} est={est} 오차={off}"

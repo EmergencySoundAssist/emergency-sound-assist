@@ -48,7 +48,17 @@ python -m doa.multi_live                              # 기본 (단일 음원 + 
 python -m doa.multi_live --led                        # + LED 링 점등
 python -m doa.multi_live --no-smooth                  # 스무딩 끄고 옛 즉시반응과 비교
 python -m doa.multi_live --num 2 --algo music         # 동시 2개 (MUSIC)
+python -m doa.multi_live --device 2                   # 입력 장치 인덱스 직접 지정
 ```
+
+### 하드웨어 없이 검증 — `--demo`
+ReSpeaker 없이 **합성 음원**으로 전체 파이프라인(SRP + 스무딩 + 매핑)을 돌린다. 새 기기(특히
+**Jetson aarch64**)에서 "설치(pyroomacoustics)·연산이 도는가"를 장치/udev 없이 즉시 확인:
+```bash
+python -m doa.multi_live --demo            # 음원을 한 바퀴 돌리며 입력각 vs 추정각 출력
+python -m doa.multi_live --demo --algo music
+```
+끝에 `N/48 프레임 오차 ≤10°` 가 뜨면 정상. (절대 각도 보정은 실물 `doa.diag` 로.)
 - **방향이 확정되면** 한 줄 실시간 갱신, 동시 2개 이상이면 `#1 ★다중(2) ...` 영구 로그.
 - 신뢰도가 낮으면(반사/잡음) **`방향 불확실 (감지됨 conf=..)`** — 틀린 화살표 대신 안전쪽.
 

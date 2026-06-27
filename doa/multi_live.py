@@ -35,6 +35,7 @@ from doa.multi_source import (
     FS_DEFAULT,
     estimate_multiple_directions,
     find_respeaker_device,
+    synth_array_signal,
 )
 from doa.tracking import DirectionTracker
 
@@ -45,6 +46,52 @@ def _compass_bar(angles_deg, width: int = 36) -> str:
     for a in angles_deg:
         cells[int(a % 360 / 360 * width) % width] = "●"
     return "[" + "".join(cells) + "]"
+
+
+def _run_demo(args) -> None:
+    """하드웨어 없이 합성 음원을 한 바퀴 돌려 전체 DoA 파이프라인을 검증/시연한다.
+
+    ReSpeaker·udev 없이 'pip install 이 잘 됐고(특히 aarch64 pyroomacoustics), SRP+스무딩
+    연산이 이 기기에서 돈다'를 즉시 확인하는 용도. 절대 각도 보정은 실물 `doa.diag` 로.
+    """
+    fs = FS_DEFAULT
+    tracker = None
+    if args.smooth:
+        tracker = DirectionTracker(
+            maxlen=max(1, round(config.SMOOTH_WIN / args.hop)),
+            conf_min=args.conf_min, min_frames=config.SMOOTH_MIN_FRAMES,
+        )
+    print("== DEMO: 합성 음원 (하드웨어 불필요) — SRP/스무딩 파이프라인 검증 ==")
+    print(f"window={args.window}s algo={args.algo} num={args.num} "
+          f"smooth={'on' if tracker else 'off'} | Ctrl+C 종료\n")
+
+    seq = [a % 360 for a in range(0, 720, 15)]   # 음원을 두 바퀴 회전
+    ok = 0
+    try:
+        for step, true_deg in enumerate(seq):
+            raw4 = synth_array_signal(true_deg, seconds=args.window, fs=fs,
+                                      snr_db=args.demo_snr, seed=step)
+            results, conf = estimate_multiple_directions(
+                raw4, fs=fs, num_src=args.num, algo=args.algo,
+                height_ratio=args.height, min_sep_deg=args.min_sep,
+                with_confidence=True,
+            )
+            est = results[0][0] if results else None
+            shown = tracker.update(est, conf).angle if tracker is not None else est
+            err = None if est is None else abs((est - true_deg + 180) % 360 - 180)
+            if err is not None and err <= 10:
+                ok += 1
+            dir_s = angle_to_direction(shown).value if shown is not None else "—"
+            est_s = "  -" if est is None else f"{est:3.0f}"
+            err_s = "      " if err is None else f" err={err:2.0f}°"
+            print(f"\r{_compass_bar([] if est is None else [est])}  "
+                  f"입력 {true_deg:3d}° → 추정 {est_s}°{err_s}  conf={conf:4.1f} → {dir_s}    ",
+                  end="", flush=True)
+            time.sleep(0.08)
+    except KeyboardInterrupt:
+        pass
+    print(f"\n\nDEMO 완료 — {ok}/{len(seq)} 프레임 추정오차 ≤10°. "
+          "하드웨어 없이 파이프라인 동작 확인됨.")
 
 
 def main() -> None:
@@ -73,13 +120,23 @@ def main() -> None:
                          f"(--smooth/--no-smooth, config={config.SMOOTH})")
     ap.add_argument("--conf-min", type=float, default=config.CONF_MIN,
                     help=f"이 신뢰도(주엽 우월도) 미만이면 '방향 불확실' (config={config.CONF_MIN})")
+    ap.add_argument("--demo", action="store_true",
+                    help="하드웨어 없이 합성 음원으로 전체 파이프라인 실행 (Jetson 설치/연산 검증)")
+    ap.add_argument("--demo-snr", type=float, default=20.0,
+                    help="--demo 합성 신호 SNR(dB) (기본 20)")
+    ap.add_argument("--device", type=int, default=None,
+                    help="입력 장치 인덱스 (미지정 시 이름으로 ReSpeaker 자동 탐지). sd.query_devices() 로 확인")
     args = ap.parse_args()
+
+    if args.demo:                       # 하드웨어 불필요 경로
+        _run_demo(args)
+        return
 
     import sounddevice as sd
 
-    dev = find_respeaker_device(sd)
+    dev = args.device if args.device is not None else find_respeaker_device(sd)
     if dev is None:
-        print("ReSpeaker(6채널)를 못 찾음. sd.query_devices() 확인.")
+        print("ReSpeaker(6채널)를 못 찾음. sd.query_devices() 로 확인 후 --device 인덱스 지정.")
         return
 
     ring = None
