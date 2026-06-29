@@ -31,9 +31,13 @@ confidence: float                 # 0.0 ~ 1.0
 is_emergency: bool                # siren/horn 이면 True
 subtype: SirenSubtype | None      # siren 일 때만 차종 (아래)
 subtype_confidence: float | None  # 차종 확률 0~1 (없으면 None)
+speed_level: int | None           # siren 접근 속도 1~5 (느림~빠름)
+speed_kmh: float | None           # 원시 추정 속도(km/h, 참고)
 ```
 - `SirenSubtype`: `ambulance`(구급차) | `police`(경찰차) | `fire`(소방차) | `unknown`(긴급차량, 확신<0.6)
-- 차종은 **siren 일 때만** 채워진다 — `horn`/`noise` 는 `subtype = None`.
+- 차종·속도는 **siren 일 때만** 채워진다 — `horn`/`noise` 는 `None`.
+- **속도(1~5)**: ViT `speed_neural` 모델로 멜→km/h→단계. `to_korean()` 이 "빠르게 접근 중"처럼 표시.
+  ⚠ 실주행 미검증(정지 환각) — 데모용. 매 틱 raw 값이라 다소 흔들림(스무딩 미적용).
 - 설계 상세 → [classifier/subtype.md](classifier/subtype.md)
 
 ## ② 방향 출력: `DirectionResult`
