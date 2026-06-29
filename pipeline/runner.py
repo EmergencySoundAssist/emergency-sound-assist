@@ -4,21 +4,22 @@
 흐름 (docs/architecture.md):
   chunk → ① classifier.infer (ch0)
         → 긴급(siren/horn): ② 방향 + ③ 접근  ·  STT 멈춤(우선순위 전환)
-        → 평상시(noise)   : ④ STT (말소리면 자막)
+        → 평상시(noise)   : ④ STT 워커에 청크 전달(자막은 뒤에서)
         → FusedResult → "구급차, 후방, 접근 중"  또는  "… · 자막: …"
 
 분류가 '긴급/평상시 스위치' 역할 (docs 1단계 게이트):
-  - 사이렌·경적이면 긴급 경고에 집중하고 STT 는 건너뛴다(연산 절약 + 사이렌 헛인식 방지).
-    이때 STT 발화 버퍼는 reset() 으로 비운다 (긴급↔STT 우선순위 자동 전환, WBS 10주차).
-  - 그 외(noise) 면 STT 가 '사람 말소리인가' 보고 자막을 만든다.
-    (분류엔 speech 클래스가 없어 말소리는 noise 로 분류됨 → 게이트로 STT 에 흘려보낸다.)
+  - 사이렌·경적이면 긴급 경고에 집중하고 STT 는 멈춘다(reset). 긴급↔STT 우선순위 전환.
+  - 그 외(noise) 면 STT 워커에 청크를 흘려보낸다. 말소리면 워커가 자막을 만든다.
+
+★ STT 는 **백그라운드 워커(스레드)** 로 돈다 (stt.worker.STTWorker):
+  - process() 는 worker.feed()/reset() 만 호출하고 **즉시 반환**한다(블로킹 X).
+    → STT 가 인식하는 동안에도 분류·방향·접근은 멈추지 않는다(사이렌 놓침 방지).
+  - 완성된 자막은 worker.latest() 로 가져와 FusedResult.speech 에 실어 보낸다.
+  - stt_worker=None 이면 STT 없이 동작(기존과 동일).
 
 채널 처리:
   - 다채널 (n, C) 이면 ch0(처리채널)을 분류·접근·STT 에, ch1~4 를 방향(SRP)에 쓴다.
   - 1채널이면 방향은 ReSpeaker 자체 DoA 폴백(없으면 미상).
-
-STT 는 선택: transcriber=None 이면 STT 없이 동작(기존과 동일). 엔진(faster-whisper)은
-실제 인식 시점에만 로드되므로, 사이렌만 들리는 동안엔 미설치라도 문제없다.
 """
 
 from __future__ import annotations
@@ -44,13 +45,14 @@ from approach.detector import ApproachDetector
 class Pipeline:
     """청크 단위 실시간 처리기. process(chunk) → FusedResult.
 
-    transcriber: stt.Transcriber 인스턴스(선택). None 이면 STT 비활성(자막 없음).
+    stt_worker: stt.worker.STTWorker 인스턴스(선택). None 이면 STT 비활성(자막 없음).
+                feed/reset/latest 인터페이스만 쓰므로 비동기 워커가 메인을 막지 않는다.
     """
 
-    def __init__(self, transcriber: Optional["object"] = None) -> None:
+    def __init__(self, stt_worker: Optional["object"] = None) -> None:
         self._approach = ApproachDetector()
         self._active = False
-        self._stt = transcriber          # 평상시 음성→자막 (없으면 STT 생략)
+        self._stt = stt_worker           # 평상시 음성→자막 (백그라운드, 없으면 STT 생략)
 
     def process(self, chunk: AudioChunk) -> FusedResult:
         mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
@@ -62,15 +64,16 @@ class Pipeline:
             direction = self._direction(chunk)
             approach = self._approach.update(mono_chunk)
             if self._stt is not None:
-                self._stt.reset()                # 긴급 진입 → 발화 버퍼 비움(우선순위 전환)
-        else:                                    # ── 평상시: STT 로 자막 ──
+                self._stt.reset()                # 긴급 진입 → 발화 버퍼 비움(즉시 반환)
+        else:                                    # ── 평상시: STT 워커로 자막 ──
             if self._active:                     # 긴급음 종료 → 접근 추세 상태 초기화
                 self._approach.reset()
                 self._active = False
             direction = DirectionResult(direction=Direction.UNKNOWN)
             approach = ApproachResult(motion=Motion.UNKNOWN)
             if self._stt is not None:
-                speech = self._stt.transcribe(mono_chunk)   # 말소리면 자막(발화 단위)
+                self._stt.feed(mono_chunk)       # 워커에 전달(블로킹 X)
+                speech = self._stt.latest()      # 뒤에서 완성된 자막 있으면 실어 보냄
 
         return FusedResult(sound=cls, direction=direction, approach=approach, speech=speech)
 

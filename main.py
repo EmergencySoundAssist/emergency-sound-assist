@@ -43,11 +43,15 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
-def run_stream(chunks, transcriber=None) -> None:
-    pipe = Pipeline(transcriber=transcriber)
-    for i, chunk in enumerate(chunks):
-        fused = pipe.process(chunk)
-        print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
+def run_stream(chunks, stt_worker=None) -> None:
+    pipe = Pipeline(stt_worker=stt_worker)
+    try:
+        for i, chunk in enumerate(chunks):
+            fused = pipe.process(chunk)
+            print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
+    finally:
+        if stt_worker is not None:
+            stt_worker.stop()
 
 
 def main() -> None:
@@ -62,25 +66,34 @@ def main() -> None:
     ap.add_argument("--stt", action="store_true",
                     help="평상시 음성→자막(STT). 사이렌·경적일 땐 자동 멈춤. "
                          "faster-whisper 필요(pip install -r stt/requirements.txt)")
+    ap.add_argument("--stt-model", default=None,
+                    help="STT 모델 크기 (tiny/base/small/medium). 기본 small. "
+                         "노트북 데모는 tiny·base 가 빠름")
     args = ap.parse_args()
 
-    transcriber = None
+    stt_worker = None
     if args.stt:
         from stt.transcriber import Transcriber
-        transcriber = Transcriber()
-        print("[stt] 평상시 자막 ON — 사이렌·경적일 땐 자동으로 멈춥니다")
+        from stt.config import STTConfig
+        from stt.worker import STTWorker
+        cfg = STTConfig()
+        if args.stt_model:
+            cfg.model_size = args.stt_model
+        stt_worker = STTWorker(Transcriber(config=cfg))
+        stt_worker.start()
+        print(f"[stt] 평상시 자막 ON (모델 {cfg.model_size}, 백그라운드 스레드) — 사이렌·경적일 땐 자동 멈춤")
 
     if args.demo:
         print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
         sig = _synth_passby()
-        run_stream(iter_chunks_from_array(sig), transcriber)
+        run_stream(iter_chunks_from_array(sig), stt_worker)
     elif args.wav:
         print(f"== WAV: {args.wav} ==")
         sig = load_wav(args.wav)
-        run_stream(iter_chunks_from_array(sig), transcriber)
+        run_stream(iter_chunks_from_array(sig), stt_worker)
     else:
         print("== MIC: 실시간 (Ctrl+C 종료) ==")
-        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels), transcriber)
+        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels), stt_worker)
 
 
 if __name__ == "__main__":
