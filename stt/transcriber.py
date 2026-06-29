@@ -24,6 +24,7 @@ import numpy as np
 from core.types import AudioChunk, SpeechResult
 from .config import STTConfig
 from .device import resolve_runtime
+from .vad import make_vad
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +198,7 @@ class Transcriber:
         self.cfg = config or STTConfig()
         self._engine = engine          # 주입 가능(테스트). None 이면 첫 인식 때 lazy-load.
         self._on_status = on_status    # 상태 콜백("transcribing" 등) — UI 표시용
+        self._vad = make_vad(self.cfg)     # webrtcvad(있으면) / energy 폴백
         self._buf: List[np.ndarray] = []   # 음성이 이어지는 동안 누적
         self._silence_run = 0              # 음성 이후 연속 무음 청크 수
         self._had_speech = False           # 현재 버퍼에 음성이 들어있는지
@@ -209,7 +211,7 @@ class Transcriber:
     def transcribe(self, chunk: AudioChunk) -> SpeechResult:
         x = _to_mono(chunk.samples)
         sr = chunk.sample_rate
-        is_voice = _rms(x) >= self.cfg.vad_rms_threshold
+        is_voice = self._vad.is_speech(x, sr)
 
         if is_voice:
             self._buf.append(x)

@@ -35,9 +35,13 @@ class STTConfig:
     cpu_threads: int = 0            # 0=ctranslate2 자동. Jetson(Orin 6코어)은 4~6 으로 ↑
     num_workers: int = 1           # 단일 실시간 스트림은 1
 
-    # ----- 무음 게이트(VAD): 조용하면 엔진을 아예 안 돌려 비용 절약 -----
-    # 너무 낮추면(0.005) 노이즈까지 Whisper 로 보내 헛인식(환각)을 유발 → 0.02 로 보수적.
-    # 환경에 맞춰 --vad 로 조정(조용한 실내면 ↓, 시끄러운 도로면 ↑).
+    # ----- VAD(음성 활동 감지): 노이즈를 거르고 음성일 때만 인식 -----
+    # webrtcvad(말소리/비음성 구분, torch 0)가 있으면 자동 사용 → 노이즈 환각 억제.
+    # 없으면 energy(RMS) 폴백. 강제: vad_backend="webrtc"|"energy".
+    vad_backend: str = "auto"
+    webrtc_aggressiveness: int = 2       # 0~3 (높을수록 비음성 강하게 걸러냄)
+    webrtc_voiced_ratio: float = 0.2     # 1초 청크 중 음성 프레임 비율 ≥ 이면 음성
+    # energy 폴백용 임계값(webrtcvad 없을 때만). 너무 낮추면(0.005) 노이즈→환각.
     vad_rms_threshold: float = 0.02
 
     # ----- 발화 단위 버퍼링 -----
