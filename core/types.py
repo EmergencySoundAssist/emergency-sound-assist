@@ -66,6 +66,8 @@ class ClassResult:
     is_emergency: bool                       # siren/horn 이면 True
     subtype: Optional[SirenSubtype] = None          # siren 일 때만 차종 (구급/경찰/소방/불명)
     subtype_confidence: Optional[float] = None      # 차종 확률 0~1 (없으면 None)
+    speed_level: Optional[int] = None               # siren 접근 속도 1~5 (느림~빠름)
+    speed_kmh: Optional[float] = None               # 원시 추정 속도(km/h, 참고용)
 
     @staticmethod
     def from_label(
@@ -73,6 +75,8 @@ class ClassResult:
         confidence: float,
         subtype: Optional[SirenSubtype] = None,
         subtype_confidence: Optional[float] = None,
+        speed_level: Optional[int] = None,
+        speed_kmh: Optional[float] = None,
     ) -> "ClassResult":
         emergency = label in (SoundClass.SIREN, SoundClass.HORN)
         return ClassResult(
@@ -81,6 +85,8 @@ class ClassResult:
             is_emergency=emergency,
             subtype=subtype,
             subtype_confidence=subtype_confidence,
+            speed_level=speed_level,
+            speed_kmh=speed_kmh,
         )
 
 
@@ -180,6 +186,10 @@ class FusedResult:
             Motion.STEADY: "유지",
             Motion.UNKNOWN: "이동 미상",
         }[self.approach.motion]
+        # 접근 중이고 속도 단계가 있으면 빠르기 형용사를 붙인다 ('빠르게 접근 중').
+        if self.sound.speed_level is not None and self.approach.motion is Motion.APPROACHING:
+            spd = {1: "아주 느리게 ", 2: "천천히 ", 3: "", 4: "빠르게 ", 5: "매우 빠르게 "}
+            ko_motion = f"{spd[self.sound.speed_level]}접근 중"
         line = f"{ko_sound}, {ko_dir}, {ko_motion}"
         if self.speech is not None and self.speech.is_speech and self.speech.text:
             line += f"  · 자막: {self.speech.to_korean()}"   # 평상시 음성 자막

@@ -53,6 +53,16 @@ _TO_SUBTYPE = {
 _SUBTYPE_PATH = Path(__file__).resolve().parent / "models" / "subtype_cnn_attn_s42.onnx"
 SUBTYPE_CONF = 0.6        # 미만이면 '긴급차량'(UNKNOWN)으로 일반화 (경찰↔구급 혼동 회피)
 
+# ── 접근 속도(사이렌 빠르기) — ViT speed_neural 모델 (선택) ──────────
+# 검출과 입력(64×216 멜, hop 512)·정규화가 동일 → 같은 윈도우를 그대로 재사용한다.
+# 출력은 km/h(0~80 학습) → 1~5단계로 변환. ⚠ 실주행 미검증(정지 환각) — 데모용.
+_SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural.onnx"
+
+
+def _kmh_to_level(v_kmh: float) -> int:
+    """추정 km/h → 접근 속도 1~5단계 (16km/h 폭, 0~80 학습 범위)."""
+    return int(min(5, max(1, int(v_kmh // 16) + 1)))
+
 
 # ── 전처리 (dataset.py logmel 복제) ──────────────────────────────────
 def _mel_fb(sr=SR_MODEL, n_fft=N_FFT, n_mels=N_MELS) -> np.ndarray:
@@ -110,6 +120,9 @@ class _OnnxClassifier:
         self._sub_sess = None
         self._sub_in = None
         self._sub_unavailable = False        # 차종 모델 없음 확인 후 재시도 방지
+        self._spd_sess = None
+        self._spd_in = None
+        self._spd_unavailable = False        # 속도 모델 없음 확인 후 재시도 방지
 
     def _session(self):
         if self._sess is None:
@@ -152,6 +165,30 @@ class _OnnxClassifier:
         sub = _TO_SUBTYPE[SUBS[j]] if p >= SUBTYPE_CONF else SirenSubtype.UNKNOWN
         return sub, p
 
+    def _speed_session(self):
+        """속도 ONNX 세션 (lazy). 파일이 없으면 None — 속도 없이 동작한다."""
+        if self._spd_sess is None and not self._spd_unavailable:
+            if not _SPEED_PATH.exists():
+                self._spd_unavailable = True
+                print(f"[classifier] 속도 모델 없음({_SPEED_PATH.name}) → 속도 단계 생략")
+                return None
+            import onnxruntime as ort            # 지연 import
+            prefer = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+            providers = [p for p in prefer if p in ort.get_available_providers()]
+            self._spd_sess = ort.InferenceSession(str(_SPEED_PATH), providers=providers)
+            self._spd_in = self._spd_sess.get_inputs()[0].name
+        return self._spd_sess
+
+    def _infer_speed(self, x: np.ndarray):
+        """정규화된 멜 (1,1,64,216) → (속도 1~5단계, km/h) | (None, None).
+        검출과 동일 입력이라 같은 윈도우 x 를 그대로 넣는다. 사이렌일 때만 호출."""
+        sess = self._speed_session()
+        if sess is None:
+            return None, None
+        out = sess.run(None, {self._spd_in: x})       # [speed(km/h), f0]
+        v = max(0.0, float(np.asarray(out[0]).ravel()[0]))
+        return _kmh_to_level(v), v
+
     def reset(self) -> None:
         self._buf = np.zeros(0, dtype=np.float32)
 
@@ -173,9 +210,12 @@ class _OnnxClassifier:
         label = _TO_SOUNDCLASS[CLASSES[i]]
 
         subtype, sub_conf = None, None
-        if label is SoundClass.SIREN:            # 차종은 사이렌일 때만 (모델도 siren으로만 학습)
+        speed_level, speed_kmh = None, None
+        if label is SoundClass.SIREN:            # 차종·속도는 사이렌일 때만 (멜 그대로 재사용)
             subtype, sub_conf = self._infer_subtype(x)
-        return ClassResult.from_label(label, float(prob[i]), subtype, sub_conf)
+            speed_level, speed_kmh = self._infer_speed(x)
+        return ClassResult.from_label(label, float(prob[i]), subtype, sub_conf,
+                                      speed_level, speed_kmh)
 
 
 _CLF = _OnnxClassifier()
