@@ -64,6 +64,7 @@ def main() -> None:
     ap.add_argument("--respeaker", action="store_true", help="ReSpeaker 6채널 ch0 입력(Jetson)")
     ap.add_argument("--device", type=int, default=None, help="입력 장치 인덱스(미지정 시 자동)")
     ap.add_argument("--cpu", action="store_true", help="GPU 무시하고 CPU 강제")
+    ap.add_argument("--threads", type=int, default=None, help="CPU 스레드 수(Orin 6코어면 6). 속도↑")
     args = ap.parse_args()
 
     cfg = STTConfig()
@@ -73,6 +74,8 @@ def main() -> None:
         cfg.language = args.lang
     if args.cpu:                       # GPU 가 있어도 CPU 로 강제
         cfg.device, cfg.compute_type = "cpu", "int8"
+    if args.threads is not None:
+        cfg.cpu_threads = args.threads
 
     if args.wav:
         run_wav(args.wav, cfg)

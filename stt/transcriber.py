@@ -45,9 +45,11 @@ class FasterWhisperEngine:
 
         # "auto" 면 노트북=cpu/int8, Jetson(GPU)=cuda/float16 으로 결정.
         device, compute_type = resolve_runtime(cfg.device, cfg.compute_type)
-        print(f"[stt] 엔진 로드: {cfg.model_size} on {device}/{compute_type}", file=sys.stderr)
+        print(f"[stt] 엔진 로드: {cfg.model_size} on {device}/{compute_type}"
+              f" (cpu_threads={cfg.cpu_threads})", file=sys.stderr)
         self._model = WhisperModel(
-            cfg.model_size, device=device, compute_type=compute_type
+            cfg.model_size, device=device, compute_type=compute_type,
+            cpu_threads=cfg.cpu_threads, num_workers=cfg.num_workers,
         )
         self._language = cfg.language
         self._beam_size = cfg.beam_size
@@ -56,8 +58,10 @@ class FasterWhisperEngine:
         self, samples: np.ndarray, sample_rate: int
     ) -> Tuple[str, float, Optional[str]]:
         # faster-whisper 는 16kHz 모노 float32 numpy 를 직접 받는다.
+        # condition_on_previous_text=False: 발화 단위로 독립 인식 → 노이즈에서 반복/환각 줄고 약간 빠름.
         segments, info = self._model.transcribe(
-            samples, language=self._language, beam_size=self._beam_size
+            samples, language=self._language, beam_size=self._beam_size,
+            condition_on_previous_text=False,
         )
         segs = list(segments)
         text = " ".join(s.text.strip() for s in segs).strip()

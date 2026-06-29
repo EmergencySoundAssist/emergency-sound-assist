@@ -30,7 +30,9 @@ class STTConfig:
     # 으로 stt.device.resolve_runtime 이 알아서 고른다. 강제하려면 "cpu"/"cuda" 지정.
     device: str = "auto"
     compute_type: str = "auto"
-    beam_size: int = 1              # 1=greedy(빠름). 정확도 필요하면 ↑
+    beam_size: int = 1              # 1=greedy(가장 빠름). 정확도 필요하면 ↑
+    cpu_threads: int = 0            # 0=ctranslate2 자동. Jetson(Orin 6코어)은 4~6 으로 올리면 CPU 추론 빨라짐
+    num_workers: int = 1           # 단일 실시간 스트림은 1. (배치 처리량 늘릴 때만 ↑)
 
     # ----- 무음 게이트(VAD): 조용하면 엔진을 아예 안 돌려 비용 절약 -----
     vad_rms_threshold: float = 0.01  # float32[-1,1] 기준 RMS. 이 이상이면 '음성'으로 간주

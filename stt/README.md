@@ -60,6 +60,27 @@ python -m stt.run --mic --model small         # 한국어는 small 권장
 
 ---
 
+## 속도 올리기 (느릴 때)
+
+영향 큰 순서:
+
+1. **전력 모드 최대 (무료·즉시, CPU/GPU 둘 다 큼)**
+   ```bash
+   sudo nvpmodel -m 0 && sudo jetson_clocks
+   ```
+2. **GPU 가속 (가장 큰 폭)** — CPU `small`은 경계선, GPU `small`은 ~6-7배 실시간.
+   → [../docs/stt/jetson.md](../docs/stt/jetson.md)의 GPU 절차(Docker 권장).
+3. **CPU면 모델 줄이기** — `--model base`(small의 2~3배 빠름) 또는 `--model tiny`. 한국어 정확도와 트레이드오프.
+4. **CPU 스레드 늘리기** — Orin 6코어:
+   ```bash
+   python -m stt.run --mic --respeaker --model base --threads 6
+   ```
+5. 이미 적용된 것: `beam_size=1`(greedy), `int8`/`int8_float16`, energy VAD(무음 스킵),
+   발화 단위 인식, `condition_on_previous_text=False`(반복/환각 억제).
+
+> 체감 지연(latency)은 "말 끝나고 인식"하는 발화 단위 설계 탓도 있다. 더 빨리 반응하게 하려면
+> `STTConfig.silence_release_chunks`/`max_utterance_seconds`를 줄이되, 문장이 잘릴 수 있어 주의.
+
 ## 두 갈래로 보면 간단
 | 목적 | 방법 | 난이도 |
 |------|------|--------|
