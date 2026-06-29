@@ -1,34 +1,38 @@
-# 방향 추정 (DoA) 설계  *(팀원 담당 — 뼈대)*
+# 방향 추정 (DoA) 설계  *(담당: 천자민)*
 
 > 목표: 오디오 → 전/후/좌/우 4방향 → `core.types.DirectionResult` 반환
 > 구현 파일: [`doa/estimator.py`](../../doa/estimator.py) — `estimate_direction(chunk) → DirectionResult`
+> 실행/옵션은 [running.md](./running.md), 다중 음원은 [multi-source.md](./multi-source.md), Jetson은 [jetson.md](./jetson.md).
 
 ---
 
 ## 2단계 전략
 
-### 1단계 (MVP): ReSpeaker 자체 DoA
+### 1단계 (MVP): ReSpeaker 자체 DoA — ✅ 구현
 - ReSpeaker가 펌웨어에서 계산한 방향 값을 **USB로 읽기만** 함.
-- `pyusb` + `tuning.py` → `Tuning.direction` (0~359°)
-- 각도 → 4방향 변환 (전 315~45° / 우 45~135° / 후 135~225° / 좌 225~315°)
-- 장점: 코드 짧음, DSP 불필요. 한계: 음성용 튜닝이라 도로/사이렌 정확도 미보장.
+- `pyusb` + [`respeaker_tuning.py`](../../doa/respeaker_tuning.py) → `Tuning.direction` (0~359°)
+- 각도 → 4방향 변환([estimator.py](../../doa/estimator.py) `angle_to_direction`), 케이블=후방 보정([direction-mapping.md](./direction-mapping.md)).
+- 경량(numpy+pyusb)이라 Jetson 최초 브링업 경로([`doa/live.py`](../../doa/live.py)).
 
-### 2단계 (개선, 필요시): 4채널 GCC-PHAT / TDOA
-- 원본 4채널(ch1~4)로 **마이크 간 도착 시간 차이(TDOA)** 계산 → 방향.
-- **GCC-PHAT**로 시간차를 노이즈에 강하게 측정.
-- 사이렌 대역(~500~1500Hz) band-pass 후 계산하면 도로 노이즈에 강해짐.
-- 라이브러리: `pyroomacoustics`(DoA 알고리즘 내장) 또는 numpy/scipy 직접 구현.
+### 2단계 (고도화): 4채널 SRP-PHAT / MUSIC 다중 음원 — ✅ 구현
+- 원본 4채널(ch1~4)을 직접 처리해 **공간 스펙트럼**에서 동시 여러 방향 추정([multi_source.py](../../doa/multi_source.py)).
+- `pyroomacoustics` 의 **SRP-PHAT**(기본, 가벼움) / **MUSIC**(다중 분리 유리). 사이렌 대역(~500~1500Hz)만 사용.
+  > 초기 계획은 GCC-PHAT 직접 구현이었으나, pyroomacoustics 의 SRP/MUSIC 로 대체(다중 음원·유지보수 이점).
+- **견고화**: 시간 다수결([tracking.py](../../doa/tracking.py)) + 신뢰도 게이팅(`spectrum_confidence`)으로
+  반사/터널의 ±180° 튐을 억제. 실시간 루프 [`multi_live.py`](../../doa/multi_live.py).
 
-> ⚠️ **먼저 1단계 측정 → 부족하면 2단계.** (과잉설계 방지)
+> ⚠️ **1단계로 충분한지 먼저 측정 → 부족하면 2단계.** (과잉설계 방지)
 
 ---
 
 ## 참고
 - 6채널 구성·자체 DoA 읽기: [../hardware.md](../hardware.md)
 - 출력 형식: [../interfaces.md](../interfaces.md)
-- 평가: 알려진 방향(전/후/좌/우)에서 사이렌 재생 → 정확도 표.
+- 평가: 알려진 방향(전/후/좌/우)에서 사이렌 재생 → 정확도 표 (진단 도구 `python -m doa.diag`).
 
-## TODO (팀원)
-- [ ] 자체 DoA 값 읽기 + 4방향 변환
-- [ ] 노트북 단계: 가짜 각도로 인터페이스 테스트
-- [ ] (필요시) GCC-PHAT 구현 + 사이렌 대역 필터
+## TODO
+- [x] 자체 DoA 값 읽기 + 4방향 변환 (1단계)
+- [x] 다중 음원 SRP/MUSIC + 실시간 루프 + LED (2단계)
+- [x] 시간 다수결 + 신뢰도 게이팅(±180° 튐 억제) + 진단 도구
+- [ ] 차량 장착 후 보정값 실측 확정 (`REAR_RAW_DEG`/`MIRROR`/`LED_OFFSET`/`MIC_RADIUS_M`/`CONF_MIN`)
+- [ ] Jetson 실물 검증 + 4방향 정확도 평가(혼동행렬)

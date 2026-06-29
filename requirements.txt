@@ -1,18 +1,26 @@
-# EmergencySoundAssist 런타임 의존성
-# 설치:  pip install -r requirements.txt
+# emergency-sound-assist — 런타임 의존성
+# 설치: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+#   ※ Jetson(JetPack/aarch64)은 conda 불가 → venv 사용. 상세: docs/doa/jetson.md
+#   ※ DoA 실행은 레포 루트에서 모듈로: `python -m doa.multi_live`
 
-# ── 필수 (분류 ONNX 추론 + 도플러·멜·FFT) ─────────────────
+# ── 공통 (분류·방향·접근 공용) ─────────────────────────
 numpy>=1.24
-scipy>=1.10              # classifier 리샘플(16k→22.05k)
-onnxruntime>=1.17        # cnn_attn_full ONNX 추론
+scipy>=1.10              # 멜·FFT·리샘플(16k→22.05k) / DoA 신호처리
+sounddevice>=0.4         # 실시간 마이크 캡처  ※ Ubuntu/Jetson: sudo apt install libportaudio2
+
+# ── ① 소리 분류 (classifier) ──────────────────────────
+onnxruntime>=1.17        # cnn_attn_full(검출) / 차종 ONNX 추론
                          #   Jetson은 onnxruntime-gpu 또는 TensorRT EP 사용
+soundfile>=0.12          # --wav 파일 처리
 
-# ── 오디오 입력 ────────────────────────────────────────
-# --mic (실시간 마이크): sounddevice  ※ Ubuntu/Jetson: sudo apt install libportaudio2
-# --wav (파일 처리)    : soundfile
-sounddevice>=0.4
-soundfile>=0.12
+# ── ② 방향 추정 (doa) ────────────────────────────────
+pyroomacoustics>=0.7     # SRP-PHAT / MUSIC 공간 스펙트럼 (다중 음원)
+pyusb>=1.2               # ReSpeaker USB 제어 (자체 DoA 레지스터 + LED)
+                         #   ※ libusb 백엔드 필요: brew install libusb / apt install libusb-1.0-0
 
-# ── Jetson(보드) 주의 ──────────────────────────────────
+# ── 개발 ─────────────────────────────────────────────
+pytest>=7.0
+
+# ── Jetson(보드) 주의 ────────────────────────────────
 #  - TensorRT는 JetPack에 기본 포함 → pip 설치 X (trtexec로 .engine 변환)
 #  - onnxruntime-gpu / torch 는 NVIDIA 전용 aarch64 빌드 사용 (일반 pip 아님)

@@ -9,10 +9,11 @@ EmergencySoundAssist 설계 문서 목차.
 - [용어집](glossary.md)
 
 ## 모듈별
-- [① 소리 분류 (classifier)](classifier/design.md) — 담당: 나
+- [① 소리 분류 (classifier)](classifier/design.md) — 담당: 이석우·김달현
   - [↳ 사이렌 차종 (subtype): 구급/경찰/소방](classifier/subtype.md)
-- [② 방향 추정 (doa)](doa/design.md) — 담당: 팀원
-- [③ 접근/멀어짐 (approach)](approach/design.md) — 담당: 팀원
+- [② 방향 추정 (doa)](doa/design.md) — 담당: 천자민
+  - [실행 명령어](doa/running.md) · [4방향 매핑/보정](doa/direction-mapping.md) · [다중 음원](doa/multi-source.md) · [Jetson 배포](doa/jetson.md)
+- [③ 접근/멀어짐 (approach)](approach/design.md) — 담당: 김도윤
 
 ---
 규칙: **모듈 전용 문서 = 하위폴더 / 여러 모듈 공통 = docs/ 루트.**
