@@ -107,8 +107,10 @@ def main() -> None:
     ap.add_argument("--device", type=int, default=None, help="입력 장치 인덱스(미지정 시 자동)")
     ap.add_argument("--cpu", action="store_true", help="GPU 무시하고 CPU 강제")
     ap.add_argument("--threads", type=int, default=None, help="CPU 스레드 수(Orin 6코어면 6). 속도↑")
-    ap.add_argument("--accuracy", action="store_true", help="정확도·범위 우선(beam↑+정규화, 속도 양보)")
+    ap.add_argument("--accuracy", action="store_true", help="정확도 우선(beam↑, 속도 양보)")
     ap.add_argument("--beam", type=int, default=None, help="beam_size 직접 지정(정확도↑/속도↓)")
+    ap.add_argument("--vad", type=float, default=None, help="VAD 임계값(기본 0.02). 조용한 실내면 ↓, 도로면 ↑")
+    ap.add_argument("--normalize", action="store_true", help="RMS 정규화 켜기(입력이 일관되게 작을 때만)")
     ap.add_argument("--no-meter", action="store_true", help="라이브 음량 미터/상태 표시 끄기")
     args = ap.parse_args()
 
@@ -121,10 +123,14 @@ def main() -> None:
         cfg.device, cfg.compute_type = "cpu", "int8"
     if args.threads is not None:
         cfg.cpu_threads = args.threads
-    if args.accuracy:                  # 정확도/범위 우선 프로파일
+    if args.accuracy:                  # 정확도 우선 프로파일
         cfg = STTConfig.for_accuracy(cfg)
     if args.beam is not None:
         cfg.beam_size = args.beam
+    if args.vad is not None:
+        cfg.vad_rms_threshold = args.vad
+    if args.normalize:
+        cfg.normalize_audio = True
 
     if args.wav:
         run_wav(args.wav, cfg)

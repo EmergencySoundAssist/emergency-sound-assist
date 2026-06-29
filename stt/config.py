@@ -24,9 +24,9 @@ class STTConfig:
     # 1차 선택: faster-whisper (오프라인·CPU·한국어 지원·Jetson 이식 가능).
     # 엔진은 transcriber 에서 추상화돼 있어 vosk 등으로 교체 가능.
     engine: str = "faster-whisper"
-    # 한국어는 Whisper 난이도가 높아 'base'는 약함 → 최소 'small' 권장.
-    # (속도가 급하면 --model base. 정확도 우선이면 medium/large-v3-turbo 평가)
-    model_size: str = "small"
+    # 한국어는 'small'로 인식이 많이 틀림(실측). 'medium' 이상 권장.
+    # (속도가 급하면 --model base/small. Jetson(GPU)은 large-v3-turbo 권장)
+    model_size: str = "medium"
     language: Optional[str] = "ko"  # None 이면 자동 감지
     # device/compute_type 은 "auto" 권장 → 노트북=cpu/int8, Jetson(GPU)=cuda/float16.
     device: str = "auto"
@@ -36,17 +36,19 @@ class STTConfig:
     num_workers: int = 1           # 단일 실시간 스트림은 1
 
     # ----- 무음 게이트(VAD): 조용하면 엔진을 아예 안 돌려 비용 절약 -----
-    # 0.01→0.005 로 낮춰 먼/조용한 음성도 Whisper 까지 도달(범위↑). 노이즈는 thresholds 가 거른다.
-    vad_rms_threshold: float = 0.005
+    # 너무 낮추면(0.005) 노이즈까지 Whisper 로 보내 헛인식(환각)을 유발 → 0.02 로 보수적.
+    # 환경에 맞춰 --vad 로 조정(조용한 실내면 ↓, 시끄러운 도로면 ↑).
+    vad_rms_threshold: float = 0.02
 
     # ----- 발화 단위 버퍼링 -----
     max_utterance_seconds: float = 8.0   # 한 발화 최대 길이(넘으면 강제 flush)
     silence_release_chunks: int = 1      # 음성 뒤 무음이 이만큼 연속되면 발화 끝으로 보고 flush
     min_utterance_seconds: float = 0.5   # 이보다 짧게 모인 건 잡음으로 보고 버림
 
-    # ----- 인식 품질/범위 옵션 -----
-    # normalize_audio: 먼/조용한 음성을 Whisper 전에 목표 음량으로 키워 '범위'를 넓힌다.
-    normalize_audio: bool = True
+    # ----- 인식 품질 옵션 -----
+    # normalize_audio: 기본 OFF. 조용하면 증폭하지만, 노이즈까지 키우고 클리핑(왜곡) → 인식 악화.
+    # 입력이 일관되게 너무 작을 때만 --normalize 로 켤 것.
+    normalize_audio: bool = False
     target_rms: float = 0.1                  # 정규화 목표 RMS(-20 dBFS)
     max_gain: float = 10.0                   # 최대 증폭배수(순수 노이즈 폭주 방지 상한)
     # Whisper 환각 가드(기본값을 명시 → VAD 게이트를 넓혀도 안전). 끄지 말 것.
@@ -60,23 +62,21 @@ class STTConfig:
 
     @classmethod
     def for_accuracy(cls, base: Optional["STTConfig"] = None) -> "STTConfig":
-        """정확도·범위 우선 프로파일(속도는 양보).
+        """정확도 우선 프로파일(속도는 양보).
 
-        beam_size 5(greedy→탐색) + RMS 정규화 ON. 기존 설정(base)을 받으면
-        device/model 등은 유지하고 위 항목만 올린다.
-        (더 강하게는 model_size="medium" 이지만 8GB 메모리·지연 주의 → 보드에서 측정)
+        beam_size 5(greedy→탐색). 기존 설정(base)을 받으면 device/model 등은 유지하고
+        beam 만 올린다. (정규화는 역효과라 켜지 않음 — 필요하면 --normalize)
         """
         cfg = dataclasses.replace(base) if base is not None else cls()
         cfg.beam_size = 5
-        cfg.normalize_audio = True
         return cfg
 
     @classmethod
-    def for_jetson(cls, model_size: str = "small") -> "STTConfig":
+    def for_jetson(cls, model_size: str = "large-v3-turbo") -> "STTConfig":
         """Jetson Orin Nano(8GB, GPU) 권장 프로파일.
 
-        small + cuda + float16 — Orin Tensor 코어 100% 활용, 최상급 한국어 정확도.
-        통합 8GB 가 빡빡(여러 모듈 동시 구동)하면 compute_type="int8_float16" 으로 내릴 것.
-        자세한 배포 → docs/stt/jetson.md
+        large-v3-turbo + cuda + float16 — 노이즈 한국어에 최적(풀 인코더+빠른 디코더, ~1.6GB).
+        통합 8GB 가 빡빡하면 compute_type="int8_float16" 으로(OOM 폴백이 자동 처리).
+        ⚠️ 보드는 오프라인 → 모델 미리 받아 복사. 모델 선택·다운로드 → docs/stt/jetson.md
         """
         return cls(model_size=model_size, device="cuda", compute_type="float16")

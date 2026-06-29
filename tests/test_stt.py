@@ -203,13 +203,12 @@ def test_resolve_runtime_auto_compute_follows_explicit_device():
 def test_for_jetson_profile():
     cfg = STTConfig.for_jetson()
     assert cfg.device == "cuda" and cfg.compute_type == "float16"
-    assert cfg.model_size == "small"
+    assert cfg.model_size == "large-v3-turbo"
 
 
 def test_for_accuracy_profile():
     cfg = STTConfig.for_accuracy()
     assert cfg.beam_size == 5
-    assert cfg.normalize_audio is True
 
 
 def test_for_accuracy_keeps_base_device_model():
@@ -221,9 +220,9 @@ def test_for_accuracy_keeps_base_device_model():
 
 def test_quality_defaults():
     cfg = STTConfig()
-    assert cfg.model_size == "small"          # base→small (한국어 최소)
-    assert cfg.normalize_audio is True        # 범위↑
-    assert cfg.vad_rms_threshold == 0.005     # 낮춰서 먼 음성 도달
+    assert cfg.model_size == "medium"         # small은 한국어 인식 약함(실측)
+    assert cfg.normalize_audio is False       # 정규화는 역효과라 기본 OFF
+    assert cfg.vad_rms_threshold == 0.02      # 너무 낮추면 노이즈→환각
     assert cfg.no_speech_threshold == 0.6     # 환각 가드는 유지(끄지 않음)
 
 
