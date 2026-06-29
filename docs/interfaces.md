@@ -47,6 +47,16 @@ angle_deg: float | None  # 원시 각도(있으면)
 motion: Motion           # approaching | receding | steady | unknown
 ```
 
+## ④ STT 출력: `SpeechResult`  *(MVP 외 확장)*
+```
+text: str                # 인식된 문장 (없으면 "")
+is_speech: bool          # 음성이 감지됐는지
+confidence: float        # 0.0 ~ 1.0
+lang: str | None         # 인식 언어 (예: "ko")
+
+.to_korean() →  예: '"앞에 차가 지나갑니다"'
+```
+
 ---
 
 ## 최종 통합: `FusedResult`
@@ -66,5 +76,6 @@ approach: ApproachResult
 | 분류 | `classifier.infer` | `AudioChunk → ClassResult` |
 | 방향 | `doa.estimate_direction` | `AudioChunk → DirectionResult` |
 | 접근 | `approach.ApproachDetector.update` | `AudioChunk → ApproachResult` |
+| STT | `stt.Transcriber.transcribe` | `AudioChunk → SpeechResult` |
 
 → 각자 함수 **내부만** 구현하면 됨. 시그니처(입출력 형식)는 유지.

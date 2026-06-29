@@ -65,6 +65,44 @@ def iter_chunks_from_mic(
             yield AudioChunk(samples=samples, sample_rate=sample_rate)
 
 
+def iter_chunks_from_respeaker(
+    channel: int = 0,
+    num_channels: int = 6,
+    sample_rate: int = SAMPLE_RATE,
+    chunk_seconds: float = CHUNK_SECONDS,
+    device: int | None = None,
+) -> Iterator[AudioChunk]:
+    """Jetson + ReSpeaker 용 캡처. 6채널로 열어 한 채널만 모노로 내보낸다.
+
+    ReSpeaker XVF-3000 은 USB 로 6채널을 준다(→ docs/hardware.md):
+      ch0 = 빔포밍/AEC 처리된 깨끗한 1채널  ← STT 에 가장 적합(기본값)
+      ch1~4 = 원본 마이크 / ch5 = 재생 참조
+    device=None 이면 'ReSpeaker' 가 이름에 들어간 장치를 자동 탐지한다.
+    """
+    import sounddevice as sd  # 지연 import
+
+    if device is None:
+        device = _find_respeaker_index()
+
+    n = int(sample_rate * chunk_seconds)
+    with sd.InputStream(samplerate=sample_rate, channels=num_channels,
+                        dtype="float32", device=device) as stream:
+        while True:
+            data, _ = stream.read(n)          # (n, num_channels)
+            yield AudioChunk(samples=data[:, channel].copy(), sample_rate=sample_rate)
+
+
+def _find_respeaker_index() -> int | None:
+    """입력 장치 중 이름에 'respeaker'/'seeed' 가 든 첫 장치 인덱스. 없으면 None(기본 장치)."""
+    import sounddevice as sd  # 지연 import
+
+    for idx, dev in enumerate(sd.query_devices()):
+        name = str(dev.get("name", "")).lower()
+        if dev.get("max_input_channels", 0) >= 1 and ("respeaker" in name or "seeed" in name):
+            return idx
+    return None
+
+
 def _resample(data: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     """간단 선형 리샘플링(테스트용). 정밀 작업은 librosa.resample 권장."""
     duration = len(data) / src_sr

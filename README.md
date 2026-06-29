@@ -14,6 +14,8 @@
 | ② | 방향 추정 | 전 / 후 / 좌 / 우 | 천자민 |
 | ③ | 접근/멀어짐 | 도플러 + 음량 추세 | 김도윤 |
 
+> **확장(④ STT)**: 주변 음성(확성기·외침·안내방송)을 **텍스트로** 바꿔 청각장애 운전자에게 보여 준다. → [docs/stt/design.md](docs/stt/design.md) · 담당: 천자민
+
 ---
 
 ## 프로젝트 구조
@@ -23,6 +25,7 @@ audio/        오디오 입력 (마이크/파일)
 classifier/   ① 소리 분류  ← 구현됨 (CNN+Attn ONNX 검출 + 사이렌 차종)
 doa/          ② 방향 추정  ← 구현됨 (자체 DoA·다중음원 SRP/MUSIC·LED·스무딩·진단)
 approach/     ③ 접근/멀어짐 ← 구현됨 (실시간 도플러 + 음량 추세)
+stt/          ④ STT 음성→텍스트 ← 구현됨 (faster-whisper · 확장, 독립 실행)
 pipeline/     세 결과 통합  ← 구현됨 (FusedResult → "구급차, 후방, 접근 중")
 docs/         설계 문서  → docs/README.md
 ```
@@ -67,4 +70,4 @@ python -m pytest -q                   # 테스트
 ## 문서
 설계 문서는 [`docs/`](docs/README.md) 참고:
 - [전체 구조](docs/architecture.md) · [데이터 인터페이스](docs/interfaces.md) · [하드웨어](docs/hardware.md) · [용어집](docs/glossary.md)
-- [① 분류](docs/classifier/design.md) · [↳ 차종](docs/classifier/subtype.md) · [② 방향](docs/doa/design.md) · [③ 접근](docs/approach/design.md)
+- [① 분류](docs/classifier/design.md) · [↳ 차종](docs/classifier/subtype.md) · [② 방향](docs/doa/design.md) · [③ 접근](docs/approach/design.md) · [④ STT](docs/stt/design.md)
