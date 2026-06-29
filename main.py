@@ -57,6 +57,8 @@ def main() -> None:
     g.add_argument("--wav", type=str, help="WAV 파일 경로")
     g.add_argument("--mic", action="store_true", help="실시간 마이크")
     ap.add_argument("--device", type=int, default=None, help="마이크 장치 인덱스")
+    ap.add_argument("--channels", type=int, default=1,
+                    help="마이크 채널 수 (ReSpeaker=6 → ch0 분류·접근, ch1~4 방향)")
     args = ap.parse_args()
 
     if args.demo:
@@ -69,7 +71,7 @@ def main() -> None:
         run_stream(iter_chunks_from_array(sig))
     else:
         print("== MIC: 실시간 (Ctrl+C 종료) ==")
-        run_stream(iter_chunks_from_mic(device=args.device))
+        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels))
 
 
 if __name__ == "__main__":

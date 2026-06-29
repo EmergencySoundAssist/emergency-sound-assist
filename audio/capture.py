@@ -44,20 +44,25 @@ def iter_chunks_from_mic(
     sample_rate: int = SAMPLE_RATE,
     chunk_seconds: float = CHUNK_SECONDS,
     device: int | None = None,
+    channels: int = 1,
 ) -> Iterator[AudioChunk]:
     """실시간 마이크에서 1초씩 읽어 청크로 내보낸다.
 
-    노트북: 내장 마이크 (device=None).
-    Jetson: ReSpeaker 장치 인덱스를 device 로 지정.
+    노트북: 내장 마이크 1채널 (channels=1, device=None).
+    Jetson: ReSpeaker 6채널 (channels=6, device=인덱스) → ch0=분류·접근, ch1~4=방향.
+
+    channels==1 이면 (n,) 모노, 그 이상이면 (n, channels) 다채널을 그대로 담는다.
+    (분류·접근은 pipeline 이 ch0 만, 방향은 ch1~4 만 골라 쓴다.)
     """
     import sounddevice as sd  # 지연 import
 
     n = int(sample_rate * chunk_seconds)
-    with sd.InputStream(samplerate=sample_rate, channels=1,
+    with sd.InputStream(samplerate=sample_rate, channels=channels,
                         dtype="float32", device=device) as stream:
         while True:
             data, _ = stream.read(n)
-            yield AudioChunk(samples=data[:, 0].copy(), sample_rate=sample_rate)
+            samples = data[:, 0].copy() if channels == 1 else data.copy()
+            yield AudioChunk(samples=samples, sample_rate=sample_rate)
 
 
 def _resample(data: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
