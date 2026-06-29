@@ -22,6 +22,7 @@
 
 > ① 분류는 `siren` 일 때 한 단계 더 들어가 차종(구급/경찰/소방)을 붙인다. → [classifier/subtype.md](classifier/subtype.md)
 > 방향은 ReSpeaker 6채널 한 스트림을 ch0(분류·접근)·ch1~4(SRP-PHAT 방향)로 갈라 `pipeline` 이 통합한다 (`python main.py --mic --channels 6`). ReSpeaker 없으면 방향만 미상.
+> ④ STT 는 **분류가 게이트**한다 — 사이렌·경적(긴급)이면 STT 를 멈추고, 평상시(noise)면 자막을 만든다 (`--stt`, WBS 10주차 우선순위 전환).
 
 ---
 

@@ -230,6 +230,11 @@ class Transcriber:
         """스트림 종료 시 남은 버퍼를 강제로 인식(있으면)."""
         return self._flush(self.cfg.sample_rate)
 
+    def reset(self) -> None:
+        """이벤트 경계(예: 긴급 감지)에서 모은 발화 버퍼를 인식 없이 비운다.
+        긴급↔평상시 우선순위 전환에서 pipeline 이 호출."""
+        self._reset()
+
     # -- 내부 ---------------------------------------------------------------
     def _buffered_seconds(self, sr: int) -> float:
         n = sum(len(b) for b in self._buf)

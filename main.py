@@ -43,8 +43,8 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
-def run_stream(chunks) -> None:
-    pipe = Pipeline()
+def run_stream(chunks, transcriber=None) -> None:
+    pipe = Pipeline(transcriber=transcriber)
     for i, chunk in enumerate(chunks):
         fused = pipe.process(chunk)
         print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
@@ -59,19 +59,28 @@ def main() -> None:
     ap.add_argument("--device", type=int, default=None, help="마이크 장치 인덱스")
     ap.add_argument("--channels", type=int, default=1,
                     help="마이크 채널 수 (ReSpeaker=6 → ch0 분류·접근, ch1~4 방향)")
+    ap.add_argument("--stt", action="store_true",
+                    help="평상시 음성→자막(STT). 사이렌·경적일 땐 자동 멈춤. "
+                         "faster-whisper 필요(pip install -r stt/requirements.txt)")
     args = ap.parse_args()
+
+    transcriber = None
+    if args.stt:
+        from stt.transcriber import Transcriber
+        transcriber = Transcriber()
+        print("[stt] 평상시 자막 ON — 사이렌·경적일 땐 자동으로 멈춥니다")
 
     if args.demo:
         print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
         sig = _synth_passby()
-        run_stream(iter_chunks_from_array(sig))
+        run_stream(iter_chunks_from_array(sig), transcriber)
     elif args.wav:
         print(f"== WAV: {args.wav} ==")
         sig = load_wav(args.wav)
-        run_stream(iter_chunks_from_array(sig))
+        run_stream(iter_chunks_from_array(sig), transcriber)
     else:
         print("== MIC: 실시간 (Ctrl+C 종료) ==")
-        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels))
+        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels), transcriber)
 
 
 if __name__ == "__main__":

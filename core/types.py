@@ -145,13 +145,14 @@ class SpeechResult:
 # ---------------------------------------------------------------------------
 @dataclass
 class FusedResult:
-    """pipeline 이 세 모듈 결과를 합친 최종 출력."""
+    """pipeline 이 모듈 결과를 합친 최종 출력 (STT 자막은 평상시에만)."""
     sound: ClassResult
     direction: DirectionResult
     approach: ApproachResult
+    speech: Optional[SpeechResult] = None      # ④ STT 자막 (평상시만, 긴급이면 None)
 
     def to_korean(self) -> str:
-        """예: '구급차, 후방, 접근 중' (사이렌인데 차종 미상이면 '사이렌')"""
+        """예: '구급차, 후방, 접근 중' / 평상시 음성이면 '… · 자막: "…"'"""
         ko_subtype = {
             SirenSubtype.AMBULANCE: "구급차",
             SirenSubtype.POLICE: "경찰차",
@@ -179,4 +180,7 @@ class FusedResult:
             Motion.STEADY: "유지",
             Motion.UNKNOWN: "이동 미상",
         }[self.approach.motion]
-        return f"{ko_sound}, {ko_dir}, {ko_motion}"
+        line = f"{ko_sound}, {ko_dir}, {ko_motion}"
+        if self.speech is not None and self.speech.is_speech and self.speech.text:
+            line += f"  · 자막: {self.speech.to_korean()}"   # 평상시 음성 자막
+        return line
