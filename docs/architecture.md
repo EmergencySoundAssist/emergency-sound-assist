@@ -27,9 +27,9 @@
 ## 세 모듈 (담당 분리)
 | # | 모듈 | 폴더 | 설계 문서 | 담당 |
 |---|------|------|----------|------|
-| ① | 소리 분류 | `classifier/` | [classifier/design.md](classifier/design.md) | 나 |
-| ② | 방향 추정 | `doa/` | [doa/design.md](doa/design.md) | 팀원 |
-| ③ | 접근/멀어짐 | `approach/` | [approach/design.md](approach/design.md) | 팀원 |
+| ① | 소리 분류 (+차종) | `classifier/` | [design](classifier/design.md) · [subtype](classifier/subtype.md) | 이석우·김달현 |
+| ② | 방향 추정 | `doa/` | [doa/design.md](doa/design.md) | 천자민 |
+| ③ | 접근/멀어짐 | `approach/` | [approach/design.md](approach/design.md) | 김도윤 |
 | - | 통합 | `pipeline/` | - | 공통 |
 
 - 세 모듈은 **`core/types.py`의 데이터 약속**으로 연결 → [interfaces.md](interfaces.md)
@@ -44,8 +44,8 @@
 ---
 
 ## MVP 범위
-- 분류: siren / horn / normal_traffic (3클래스)
+- 분류: siren / horn / normal_traffic (3클래스) — CNN+Attn ONNX, 구현됨
   - +차종: siren 일 때 구급/경찰/소방 (선택 — 모델 없으면 자동 생략)
-- 방향: 4방향 (자체 DoA → 필요시 GCC-PHAT)
-- 접근: 도플러 + 음량 추세
-- HUD 이전, 파이프라인 콘솔 출력까지
+- 방향: 4방향 — 자체 DoA(1단계) + 다중음원 SRP-PHAT/MUSIC(2단계), 구현됨
+- 접근: 도플러 + 음량 추세, 구현됨
+- HUD 이전, 파이프라인 콘솔 출력까지 (구현됨 — `python main.py --demo`)
