@@ -64,9 +64,14 @@ lang: str | None         # 인식 언어 (예: "ko")
 sound: ClassResult
 direction: DirectionResult
 approach: ApproachResult
+speech: SpeechResult | None      # ④ STT 자막 (평상시만, 긴급이면 None)
 
-.to_korean()  →  예: "구급차, 후방, 접근 중"   (사이렌인데 차종 미상이면 "사이렌, ...")
+.to_korean()  →  예: "구급차, 후방, 접근 중"  (사이렌인데 차종 미상이면 "사이렌, ...")
+                  평상시 음성이면 끝에 ' · 자막: "..."' 가 붙는다.
 ```
+
+> STT 는 **분류가 게이트**한다 — 긴급(siren/horn)이면 `speech=None`, 평상시(noise)면 자막.
+> 상세 동작·한계는 [architecture.md](architecture.md#stt-게이트-긴급평상시-전환--1단계) 참고.
 
 ---
 
