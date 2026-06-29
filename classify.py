@@ -27,7 +27,12 @@ from classifier import infer
 def _show(i: int, r) -> None:
     tag = "긴급" if r.is_emergency else "-"
     ko = {"siren": "사이렌", "horn": "경적", "normal_traffic": "일반 소음"}[r.label.value]
-    print(f"[{i:4d}] {ko:8s} ({r.label.value:14s}) conf={r.confidence:.2f}  {tag}")
+    sub = ""
+    if r.subtype is not None:               # 사이렌이면 차종 (구급/경찰/소방/긴급차량)
+        ko_sub = {"ambulance": "구급차", "police": "경찰차",
+                  "fire": "소방차", "unknown": "긴급차량"}[r.subtype.value]
+        sub = f" · {ko_sub}({r.subtype_confidence:.2f})"
+    print(f"[{i:4d}] {ko:8s} ({r.label.value:14s}) conf={r.confidence:.2f}  {tag}{sub}")
 
 
 def mic_chunks(device, channels, sr=SAMPLE_RATE, chunk_s=1.0):

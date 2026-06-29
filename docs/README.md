@@ -10,6 +10,7 @@ EmergencySoundAssist 설계 문서 목차.
 
 ## 모듈별
 - [① 소리 분류 (classifier)](classifier/design.md) — 담당: 나
+  - [↳ 사이렌 차종 (subtype): 구급/경찰/소방](classifier/subtype.md)
 - [② 방향 추정 (doa)](doa/design.md) — 담당: 팀원
 - [③ 접근/멀어짐 (approach)](approach/design.md) — 담당: 팀원
 

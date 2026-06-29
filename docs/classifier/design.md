@@ -5,6 +5,21 @@
 
 ---
 
+## 0. 현재 구현 상태 (이 문서 vs 실제 코드)
+
+> ⚠️ 아래 2~6장은 **초기 모델 탐색 계획**(UrbanSound8K · YAMNet/MobileNet 비교)이다.
+> 참고용으로 남겨두되, **실제 배포 구현은 아래가 사실**이다:
+>
+> - **모델**: ViT-CNN-Attention 레포에서 학습한 **CNN+Attention 검출기**를 **ONNX**
+>   (`classifier/models/cnn_attn_full_s42.onnx`)로 받아 `onnxruntime` 으로 추론.
+> - **데이터**: UrbanSound8K 가 아니라 **AI Hub 사이렌/경적/주행음** (학습은 ViT 레포에서 수행).
+> - **전처리**: 22.05kHz · **5초(216 프레임) 롤링 버퍼** · 직접 구현한 logmel
+>   (`n_fft=1024, hop=512, n_mels=64`) — `torchaudio` 미사용.
+> - **코드**: `classifier/inference.py` 하나(상태 보유 추론기). 6장의 `config.py`/`preprocessing.py` 등은 초기 계획.
+> - **차종 추가됨**: siren 일 때 구급/경찰/소방 세분화 → **[subtype.md](subtype.md)**
+
+---
+
 ## 1. 목표와 범위
 
 - 입력: 1초 길이 오디오 (16kHz 모노)
@@ -107,7 +122,8 @@
 ## 7. 인터페이스 (팀 약속)
 
 - 입력: `core.types.AudioChunk`
-- 출력: `core.types.ClassResult(label: SoundClass, confidence: float, is_emergency: bool)`
+- 출력: `core.types.ClassResult(label, confidence, is_emergency, subtype, subtype_confidence)`
+  - `subtype: SirenSubtype | None` — siren 일 때 구급/경찰/소방 ([subtype.md](subtype.md))
 - → 자세한 데이터 약속은 [../interfaces.md](../interfaces.md)
 
 ---

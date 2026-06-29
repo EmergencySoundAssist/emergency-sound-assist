@@ -9,6 +9,7 @@
 [ReSpeaker 마이크 6채널]
         │
         ├── ch0 (처리됨)  ──→  ① 분류 (classifier)   → ClassResult   (siren/horn/normal)
+        │                          └─ siren 이면 차종 추론 → 구급/경찰/소방 (subtype)
         │
         └── ch1~4 (원본)  ──→  ② 방향 (doa)          → DirectionResult (전/후/좌/우)
                           └─→  ③ 접근 (approach)      → ApproachResult  (접근/멀어짐)
@@ -16,8 +17,10 @@
         ▼
    [pipeline] 세 결과 통합 → FusedResult
         ▼
-   출력 예: "사이렌, 후방, 접근 중"   (→ 이후 HUD/디스플레이)
+   출력 예: "구급차, 후방, 접근 중"   (→ 이후 HUD/디스플레이)
 ```
+
+> ① 분류는 `siren` 일 때 한 단계 더 들어가 차종(구급/경찰/소방)을 붙인다. → [classifier/subtype.md](classifier/subtype.md)
 
 ---
 
@@ -42,6 +45,7 @@
 
 ## MVP 범위
 - 분류: siren / horn / normal_traffic (3클래스)
+  - +차종: siren 일 때 구급/경찰/소방 (선택 — 모델 없으면 자동 생략)
 - 방향: 4방향 (자체 DoA → 필요시 GCC-PHAT)
 - 접근: 도플러 + 음량 추세
 - HUD 이전, 파이프라인 콘솔 출력까지

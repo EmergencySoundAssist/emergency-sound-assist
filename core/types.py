@@ -46,17 +46,42 @@ class SoundClass(str, Enum):
     # 이후 데이터가 쌓이면 ambulance / fire_truck / police 로 세분화 확장.
 
 
+class SirenSubtype(str, Enum):
+    """사이렌 차종 — siren 일 때만 채워진다 (ViT subtype_clf 모델 출력 → core.types).
+
+    순서는 ViT subtype_clf.SUBS = [구급차, 경찰차, 소방차] 와 일치.
+    경찰↔구급 혼동이 잦아, 확신이 낮으면 UNKNOWN('긴급차량')으로 일반화한다.
+    """
+    AMBULANCE = "ambulance"     # 구급차
+    POLICE = "police"           # 경찰차
+    FIRE = "fire"               # 소방차
+    UNKNOWN = "unknown"         # 차종 불명(확신 낮음) → '긴급차량'
+
+
 @dataclass
 class ClassResult:
     """분류 모듈(★ 내 담당)의 출력."""
     label: SoundClass
     confidence: float                       # 0.0 ~ 1.0
     is_emergency: bool                       # siren/horn 이면 True
+    subtype: Optional[SirenSubtype] = None          # siren 일 때만 차종 (구급/경찰/소방/불명)
+    subtype_confidence: Optional[float] = None      # 차종 확률 0~1 (없으면 None)
 
     @staticmethod
-    def from_label(label: SoundClass, confidence: float) -> "ClassResult":
+    def from_label(
+        label: SoundClass,
+        confidence: float,
+        subtype: Optional[SirenSubtype] = None,
+        subtype_confidence: Optional[float] = None,
+    ) -> "ClassResult":
         emergency = label in (SoundClass.SIREN, SoundClass.HORN)
-        return ClassResult(label=label, confidence=confidence, is_emergency=emergency)
+        return ClassResult(
+            label=label,
+            confidence=confidence,
+            is_emergency=emergency,
+            subtype=subtype,
+            subtype_confidence=subtype_confidence,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -102,12 +127,21 @@ class FusedResult:
     approach: ApproachResult
 
     def to_korean(self) -> str:
-        """예: '사이렌, 후방, 접근 중'"""
-        ko_sound = {
-            SoundClass.SIREN: "사이렌",
-            SoundClass.HORN: "경적",
-            SoundClass.NORMAL_TRAFFIC: "일반 도로 소음",
-        }[self.sound.label]
+        """예: '구급차, 후방, 접근 중' (사이렌인데 차종 미상이면 '사이렌')"""
+        ko_subtype = {
+            SirenSubtype.AMBULANCE: "구급차",
+            SirenSubtype.POLICE: "경찰차",
+            SirenSubtype.FIRE: "소방차",
+            SirenSubtype.UNKNOWN: "긴급차량",
+        }
+        if self.sound.label is SoundClass.SIREN and self.sound.subtype is not None:
+            ko_sound = ko_subtype[self.sound.subtype]      # 사이렌 → 차종으로 세분화
+        else:
+            ko_sound = {
+                SoundClass.SIREN: "사이렌",
+                SoundClass.HORN: "경적",
+                SoundClass.NORMAL_TRAFFIC: "일반 도로 소음",
+            }[self.sound.label]
         ko_dir = {
             Direction.FRONT: "전방",
             Direction.REAR: "후방",

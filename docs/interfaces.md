@@ -26,10 +26,15 @@ sample_rate: int = 16000
 
 ## ① 분류 출력: `ClassResult`
 ```
-label: SoundClass        # siren | horn | normal_traffic
-confidence: float        # 0.0 ~ 1.0
-is_emergency: bool        # siren/horn 이면 True
+label: SoundClass                 # siren | horn | normal_traffic
+confidence: float                 # 0.0 ~ 1.0
+is_emergency: bool                # siren/horn 이면 True
+subtype: SirenSubtype | None      # siren 일 때만 차종 (아래)
+subtype_confidence: float | None  # 차종 확률 0~1 (없으면 None)
 ```
+- `SirenSubtype`: `ambulance`(구급차) | `police`(경찰차) | `fire`(소방차) | `unknown`(긴급차량, 확신<0.6)
+- 차종은 **siren 일 때만** 채워진다 — `horn`/`noise` 는 `subtype = None`.
+- 설계 상세 → [classifier/subtype.md](classifier/subtype.md)
 
 ## ② 방향 출력: `DirectionResult`
 ```
@@ -50,7 +55,7 @@ sound: ClassResult
 direction: DirectionResult
 approach: ApproachResult
 
-.to_korean()  →  예: "사이렌, 후방, 접근 중"
+.to_korean()  →  예: "구급차, 후방, 접근 중"   (사이렌인데 차종 미상이면 "사이렌, ...")
 ```
 
 ---

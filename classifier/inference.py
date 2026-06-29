@@ -10,6 +10,9 @@
   - 5초 윈도우(216 프레임) → 매 청크 누적하는 **상태 보유**(롤링 버퍼)
   - 윈도우별 정규화 (x-μ)/σ
 출력 매핑: noise → normal_traffic (core.types 약속).
+차종(선택): siren 이면 subtype_cnn_attn ONNX로 구급/경찰/소방을 추가 추론한다
+           (검출과 같은 멜 윈도우 재사용). 모델 파일이 없으면 자동 생략,
+           차종 확신<0.6 이면 '긴급차량'(UNKNOWN)으로 일반화.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from core.types import AudioChunk, ClassResult, SoundClass
+from core.types import AudioChunk, ClassResult, SoundClass, SirenSubtype
 
 # ── 학습(dataset.py)과 반드시 동일해야 하는 상수 ──────────────────────
 SR_MODEL = 22050
@@ -37,6 +40,18 @@ _TO_SOUNDCLASS = {                             # 학습 클래스 → core.types
     "noise": SoundClass.NORMAL_TRAFFIC,
 }
 _MODEL_PATH = Path(__file__).resolve().parent / "models" / "cnn_attn_full_s42.onnx"
+
+# ── 차종(사이렌 세분화) — ViT subtype_clf 모델 (선택) ────────────────
+# 검출과 입력(64×216 멜)·정규화가 동일 → 같은 윈도우를 그대로 재사용한다.
+# 모델 파일이 없으면 차종은 생략하고 기존처럼 'siren'으로만 출력(graceful).
+SUBS = ("ambulance", "police", "fire")        # subtype_clf.SUBS=[구급차,경찰차,소방차] 순서
+_TO_SUBTYPE = {
+    "ambulance": SirenSubtype.AMBULANCE,
+    "police": SirenSubtype.POLICE,
+    "fire": SirenSubtype.FIRE,
+}
+_SUBTYPE_PATH = Path(__file__).resolve().parent / "models" / "subtype_cnn_attn_s42.onnx"
+SUBTYPE_CONF = 0.6        # 미만이면 '긴급차량'(UNKNOWN)으로 일반화 (경찰↔구급 혼동 회피)
 
 
 # ── 전처리 (dataset.py logmel 복제) ──────────────────────────────────
@@ -92,6 +107,9 @@ class _OnnxClassifier:
         self._sess = None
         self._in = None
         self._buf = np.zeros(0, dtype=np.float32)
+        self._sub_sess = None
+        self._sub_in = None
+        self._sub_unavailable = False        # 차종 모델 없음 확인 후 재시도 방지
 
     def _session(self):
         if self._sess is None:
@@ -106,6 +124,33 @@ class _OnnxClassifier:
             self._sess = ort.InferenceSession(str(_MODEL_PATH), providers=providers)
             self._in = self._sess.get_inputs()[0].name
         return self._sess
+
+    def _subtype_session(self):
+        """차종 ONNX 세션 (lazy). 파일이 없으면 None — 차종 없이 동작한다."""
+        if self._sub_sess is None and not self._sub_unavailable:
+            if not _SUBTYPE_PATH.exists():
+                self._sub_unavailable = True
+                print(f"[classifier] 차종 모델 없음({_SUBTYPE_PATH.name}) → 차종 생략, 'siren'으로만 출력")
+                return None
+            import onnxruntime as ort            # 지연 import
+            prefer = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+            providers = [p for p in prefer if p in ort.get_available_providers()]
+            self._sub_sess = ort.InferenceSession(str(_SUBTYPE_PATH), providers=providers)
+            self._sub_in = self._sub_sess.get_inputs()[0].name
+        return self._sub_sess
+
+    def _infer_subtype(self, x: np.ndarray):
+        """정규화된 멜 (1,1,64,216) → (SirenSubtype, conf) | (None, None).
+        검출과 동일 입력이라 같은 윈도우 x를 그대로 넣는다. 사이렌일 때만 호출."""
+        sess = self._subtype_session()
+        if sess is None:
+            return None, None
+        logits = sess.run(None, {self._sub_in: x})[0][0]
+        prob = _softmax(logits)
+        j = int(prob.argmax())
+        p = float(prob[j])
+        sub = _TO_SUBTYPE[SUBS[j]] if p >= SUBTYPE_CONF else SirenSubtype.UNKNOWN
+        return sub, p
 
     def reset(self) -> None:
         self._buf = np.zeros(0, dtype=np.float32)
@@ -125,7 +170,12 @@ class _OnnxClassifier:
         logits = self._session().run(None, {self._in: x})[0][0]
         prob = _softmax(logits)
         i = int(prob.argmax())
-        return ClassResult.from_label(_TO_SOUNDCLASS[CLASSES[i]], float(prob[i]))
+        label = _TO_SOUNDCLASS[CLASSES[i]]
+
+        subtype, sub_conf = None, None
+        if label is SoundClass.SIREN:            # 차종은 사이렌일 때만 (모델도 siren으로만 학습)
+            subtype, sub_conf = self._infer_subtype(x)
+        return ClassResult.from_label(label, float(prob[i]), subtype, sub_conf)
 
 
 _CLF = _OnnxClassifier()
