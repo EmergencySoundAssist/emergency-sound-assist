@@ -16,8 +16,13 @@ EmergencySoundAssist 실시간 메인 루프.
 from __future__ import annotations
 
 import argparse
+import warnings
 
 import numpy as np
+
+# 무음·극단 입력 시 멜 스펙트로그램 matmul 에서 뜨는 무해한 RuntimeWarning 억제.
+# (우리 classifier 와 faster-whisper 양쪽 — 분류·인식 결과엔 영향 없음)
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=r".*matmul.*")
 
 from core.types import AudioChunk, SAMPLE_RATE
 from audio.capture import iter_chunks_from_array, iter_chunks_from_mic, load_wav
