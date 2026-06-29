@@ -36,10 +36,11 @@ pip install -r requirements.txt       # 의존성 설치
 python classify.py --demo             # 합성 사이렌으로 분류+차종 확인
 python classify.py --mic              # 실시간 마이크
 
-# 통합 파이프라인 (분류+방향+접근 → "구급차, 후방, 접근 중")
-python main.py --demo
+# 통합 파이프라인 (분류+차종+접근+방향)
+python main.py --demo                          # 합성 (방향은 미상 — 1채널)
+python main.py --mic --channels 6 --device 0   # ReSpeaker → 4개 전부 한 줄로
 
-# ② 방향 추정 (ReSpeaker 필요)
+# ② 방향만 단독 (ReSpeaker 필요)
 python -m doa.multi_live --led        # 실시간 방향 + LED
 python -m pytest -q                   # 테스트
 ```
