@@ -10,10 +10,10 @@ from __future__ import annotations
 import numpy as np
 
 from core.types import AudioChunk, SpeechResult, SAMPLE_RATE
-from stt.config import STTConfig
+from stt.config import STTConfig, EMERGENCY_PROMPT
 from stt.device import resolve_runtime
 from stt.keywords import find_keywords
-from stt.transcriber import Transcriber, transcribe_array
+from stt.transcriber import Transcriber, transcribe_array, _normalize_rms, _rms
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +73,8 @@ def test_speechresult_speech_without_keyword_not_alert():
 # ---------------------------------------------------------------------------
 def test_find_keywords_basic_and_inflection():
     assert find_keywords("앞에 구급차 지나갑니다") == ["구급차"]
-    # "비키" stem 이 "비키세요" 를 잡는다
-    assert find_keywords("빨리 비키세요!") == ["비키"]
+    # 변형 "비키" 가 잡히면 대표어 "비키세요" 로 알림
+    assert find_keywords("빨리 비키세요!") == ["비키세요"]
 
 
 def test_find_keywords_dedup_and_order():
@@ -163,7 +163,7 @@ def test_transcribe_array_with_fake_engine():
     r = transcribe_array(samples, engine=eng)
     assert r.is_speech is True
     assert r.text == "빨리 비키세요"
-    assert r.keywords == ["비키"]
+    assert r.keywords == ["비키세요"]
 
 
 # ---------------------------------------------------------------------------
@@ -193,3 +193,75 @@ def test_for_jetson_profile():
     cfg = STTConfig.for_jetson()
     assert cfg.device == "cuda" and cfg.compute_type == "int8_float16"
     assert cfg.model_size == "small"
+
+
+# ---------------------------------------------------------------------------
+# 정확도/범위: fuzzy 키워드 매칭
+# ---------------------------------------------------------------------------
+def test_fuzzy_keyword_one_char_error():
+    # STT 가 1글자 틀려도(구급차→구금차) 알림은 살아야 함
+    assert "구급차" in find_keywords("앞에 구금차 지나가요")
+
+
+def test_fuzzy_keyword_spacing_variants():
+    # 띄어쓰기 차이 무시 → 대표어로
+    assert "차 세우세요" in find_keywords("차세워 빨리")
+    assert "비키세요" in find_keywords("비켜 주세요")
+
+
+def test_fuzzy_disabled_falls_back_to_substring():
+    # fuzzy=False 면 오타는 안 잡힌다(부분 문자열만)
+    assert find_keywords("앞에 구금차 지나가요", fuzzy=False) == []
+    assert find_keywords("앞에 구급차 지나가요", fuzzy=False) == ["구급차"]
+
+
+def test_fuzzy_no_false_positive_on_plain_text():
+    assert find_keywords("오늘 날씨가 정말 좋네요") == []
+    assert find_keywords("그냥 평범한 대화였어요") == []
+
+
+# ---------------------------------------------------------------------------
+# 범위: RMS 정규화
+# ---------------------------------------------------------------------------
+def test_normalize_quiet_signal_amplified_to_target():
+    quiet = np.ones(1000, dtype=np.float32) * 0.01     # 아주 작은 신호
+    out = _normalize_rms(quiet, target_rms=0.1, max_gain=10.0)
+    assert abs(_rms(out) - 0.1) < 1e-3                 # 목표 RMS 근처로 증폭
+
+
+def test_normalize_caps_gain_to_avoid_noise_blowup():
+    tiny = np.ones(1000, dtype=np.float32) * 0.001     # 게인 100배 필요하지만
+    out = _normalize_rms(tiny, target_rms=0.1, max_gain=10.0)
+    assert abs(_rms(out) - 0.01) < 1e-3                # max_gain=10 → 0.001*10=0.01 에서 멈춤
+
+
+def test_normalize_clips_to_unit_range():
+    loud = np.ones(1000, dtype=np.float32) * 0.5
+    out = _normalize_rms(loud, target_rms=0.1, max_gain=10.0)
+    assert out.max() <= 1.0 and out.min() >= -1.0
+
+
+# ---------------------------------------------------------------------------
+# 정확도/범위 프로파일 + 환각 가드 기본값
+# ---------------------------------------------------------------------------
+def test_for_accuracy_profile():
+    cfg = STTConfig.for_accuracy()
+    assert cfg.beam_size == 5
+    assert cfg.initial_prompt == EMERGENCY_PROMPT
+    assert cfg.normalize_audio is True
+
+
+def test_for_accuracy_keeps_base_device_model():
+    base = STTConfig.for_jetson(model_size="medium")
+    acc = STTConfig.for_accuracy(base)
+    assert acc.device == "cuda" and acc.model_size == "medium"   # base 유지
+    assert acc.beam_size == 5                                    # 정확도만 올림
+
+
+def test_defaults_are_accuracy_range_leaning():
+    cfg = STTConfig()
+    assert cfg.model_size == "small"          # base→small (한국어 최소)
+    assert cfg.hotwords is not None           # 긴급어 가중 기본 ON
+    assert cfg.normalize_audio is True        # 범위↑
+    assert cfg.vad_rms_threshold == 0.005     # 낮춰서 먼 음성 도달
+    assert cfg.no_speech_threshold == 0.6     # 환각 가드는 유지(끄지 않음)

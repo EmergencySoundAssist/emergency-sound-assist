@@ -81,6 +81,35 @@ python -m stt.run --mic --model small         # 한국어는 small 권장
 > 체감 지연(latency)은 "말 끝나고 인식"하는 발화 단위 설계 탓도 있다. 더 빨리 반응하게 하려면
 > `STTConfig.silence_release_chunks`/`max_utterance_seconds`를 줄이되, 문장이 잘릴 수 있어 주의.
 
+## 정확도·범위 올리기
+
+검증 리서치(faster-whisper 1.2.x / Orin Nano) 기반으로 **기본값이 이미 정확도·범위 우선**입니다:
+
+| 항목 | 기본값 | 효과 |
+|------|--------|------|
+| 모델 | `small` (was base) | 한국어 키워드 인식률↑ (base는 너무 약함) |
+| `hotwords` | ON (긴급어 가중) | 도로 소음에서 긴급어 검출↑ (저비용) |
+| RMS 정규화 | ON | 먼/조용한 음성을 키워 **범위↑** |
+| VAD 임계값 | 0.01→**0.005** | 더 멀고 작은 음성도 Whisper 까지 도달 |
+| 환각 가드 | 명시 유지 | 게이트 넓혀도 헛인식 안 새게 |
+| 키워드 매칭 | 자모 fuzzy + 대표어 | "구금차"→"구급차" 처럼 **오인식해도 알림 유지** |
+
+**더 강하게(속도 양보):**
+```bash
+python -m stt.run --mic --respeaker --accuracy           # beam 5 + 도메인 프롬프트
+python -m stt.run --mic --respeaker --model medium        # 8GB 메모리·지연 보드에서 측정 후
+python -m stt.run --mic --respeaker --beam 3              # beam 직접 지정
+```
+
+### 더 짜낼 수 있는 것 (검증됨, 효과 큼 / 작업량 있음 — 로드맵)
+1. **ReSpeaker XVF-3000 DSP 튜닝** (range/high·low) — pyusb 로 HPF·노이즈서프레션·AGC 레지스터 조정(보드+하드웨어 필요). doa 브랜치 `respeaker_tuning.py` 재사용.
+2. **적응형 sub-frame VAD + pre-roll/hangover** (range/high) — 고정 임계 대신 노이즈 플로어 추적(30ms 프레임), 발화 앞뒤 여유 버퍼 → 잘림 방지·범위↑.
+3. **Silero VAD stage-2** (range/high) — 보드에선 `silero-vad[onnx-gpu]` 로(❗ 기본 설치는 torch 끌어와 충돌 → `--no-deps` 규율). `_Engine` 추상화 뒤에 게이트로 끼움.
+4. **SNR-게이트 DeepFilterNet 디노이징** (range/med) — **기본 OFF**, 저SNR(<~12dB)에서만. 실차 녹음으로 A/B 후 결정(Orin CPU 부하 측정 필수).
+5. **모델 large-v3-turbo** 평가 (accuracy) — 멀티링궐·4 디코더층, int8 ~1.5GB. 지연 허용되면.
+
+> 안전 맥락: "오인식해도 키워드는 놓치지 않는" fuzzy 매칭 + hotwords 가 체감상 가장 가치 큼. 디노이징·큰 모델은 **반드시 실차 녹음으로 검증 후** 적용.
+
 ## 두 갈래로 보면 간단
 | 목적 | 방법 | 난이도 |
 |------|------|--------|

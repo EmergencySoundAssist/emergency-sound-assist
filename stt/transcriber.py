@@ -53,16 +53,35 @@ class FasterWhisperEngine:
         )
         self._language = cfg.language
         self._beam_size = cfg.beam_size
+        self._initial_prompt = cfg.initial_prompt
+        self._hotwords = cfg.hotwords
+        self._no_speech_threshold = cfg.no_speech_threshold
+        self._log_prob_threshold = cfg.log_prob_threshold
+        self._compression_ratio_threshold = cfg.compression_ratio_threshold
 
     def transcribe(
         self, samples: np.ndarray, sample_rate: int
     ) -> Tuple[str, float, Optional[str]]:
         # faster-whisper 는 16kHz 모노 float32 numpy 를 직접 받는다.
         # condition_on_previous_text=False: 발화 단위로 독립 인식 → 노이즈에서 반복/환각 줄고 약간 빠름.
-        segments, info = self._model.transcribe(
-            samples, language=self._language, beam_size=self._beam_size,
+        kwargs = dict(
+            language=self._language, beam_size=self._beam_size,
             condition_on_previous_text=False,
+            # 환각 가드(기본값 명시). 끄면 VAD 넓힌 만큼 노이즈→헛인식이 새므로 유지.
+            no_speech_threshold=self._no_speech_threshold,
+            log_prob_threshold=self._log_prob_threshold,
+            compression_ratio_threshold=self._compression_ratio_threshold,
         )
+        if self._initial_prompt:
+            kwargs["initial_prompt"] = self._initial_prompt   # 도메인 편향(정확도↑)
+        if self._hotwords:
+            kwargs["hotwords"] = self._hotwords               # 키워드 가중
+        try:
+            segments, info = self._model.transcribe(samples, **kwargs)
+        except TypeError:
+            # 구버전 faster-whisper 가 hotwords 를 모르면 빼고 재시도.
+            kwargs.pop("hotwords", None)
+            segments, info = self._model.transcribe(samples, **kwargs)
         segs = list(segments)
         text = " ".join(s.text.strip() for s in segs).strip()
         # avg_logprob(로그확률) → exp 로 대략적인 0~1 신뢰도.
@@ -90,6 +109,18 @@ def _rms(x: np.ndarray) -> float:
     if x.size == 0:
         return 0.0
     return float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
+
+
+def _normalize_rms(x: np.ndarray, target_rms: float, max_gain: float) -> np.ndarray:
+    """먼/조용한 음성을 목표 RMS 로 키운다(범위↑). 순수 노이즈 폭주는 max_gain 으로 제한.
+
+    이미 큰 신호는 증폭하지 않고(게인 1 상한은 아님 — 줄일 수도 있음), 클리핑은 [-1,1] 로 막는다.
+    """
+    rms = _rms(x)
+    if rms <= 1e-6:
+        return x
+    gain = min(target_rms / rms, max_gain)
+    return np.clip(x * gain, -1.0, 1.0).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +181,9 @@ class Transcriber:
 
         if len(audio) < self.cfg.min_utterance_seconds * sr:
             return SpeechResult(is_speech=False)  # 너무 짧으면 잡음으로 보고 버림
+
+        if self.cfg.normalize_audio:              # 먼/조용한 음성 살리기(범위↑)
+            audio = _normalize_rms(audio, self.cfg.target_rms, self.cfg.max_gain)
 
         text, conf, lang = self._get_engine().transcribe(audio, sr)
         text = (text or "").strip()

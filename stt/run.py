@@ -65,6 +65,8 @@ def main() -> None:
     ap.add_argument("--device", type=int, default=None, help="입력 장치 인덱스(미지정 시 자동)")
     ap.add_argument("--cpu", action="store_true", help="GPU 무시하고 CPU 강제")
     ap.add_argument("--threads", type=int, default=None, help="CPU 스레드 수(Orin 6코어면 6). 속도↑")
+    ap.add_argument("--accuracy", action="store_true", help="정확도·범위 우선(beam↑+프롬프트, 속도 양보)")
+    ap.add_argument("--beam", type=int, default=None, help="beam_size 직접 지정(정확도↑/속도↓)")
     args = ap.parse_args()
 
     cfg = STTConfig()
@@ -76,6 +78,10 @@ def main() -> None:
         cfg.device, cfg.compute_type = "cpu", "int8"
     if args.threads is not None:
         cfg.cpu_threads = args.threads
+    if args.accuracy:                  # 정확도/범위 우선 프로파일
+        cfg = STTConfig.for_accuracy(cfg)
+    if args.beam is not None:
+        cfg.beam_size = args.beam
 
     if args.wav:
         run_wav(args.wav, cfg)
