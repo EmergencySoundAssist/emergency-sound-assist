@@ -1,7 +1,7 @@
 # ④ STT (음성→텍스트) 모듈
 
-주변 음성(경찰 확성기·외침·안내방송)을 텍스트로 바꾸고, 운전 긴급 키워드
-(구급차·비키세요·정지 등)를 짚어 청각장애 운전자에게 보여 준다.
+주변 음성(경찰 확성기·외침·안내방송)을 **텍스트로** 바꿔 청각장애 운전자에게 보여 준다.
+(긴급 여부 판단은 ① 분류 모듈의 몫 — STT 는 텍스트만 책임진다.)
 
 - 인터페이스: `Transcriber.transcribe(chunk) → SpeechResult` (`core/types.py`)
 - 설계: [../docs/stt/design.md](../docs/stt/design.md)
@@ -75,7 +75,7 @@ python -m stt.run --mic --model small         # 한국어는 small 권장
    ```bash
    python -m stt.run --mic --respeaker --model base --threads 6
    ```
-5. 이미 적용된 것: `beam_size=1`(greedy), `int8`/`int8_float16`, energy VAD(무음 스킵),
+5. 이미 적용된 것: `beam_size=1`(greedy), `int8`(CPU)/`float16`(GPU), energy VAD(무음 스킵),
    발화 단위 인식, `condition_on_previous_text=False`(반복/환각 억제).
 
 > 체감 지연(latency)은 "말 끝나고 인식"하는 발화 단위 설계 탓도 있다. 더 빨리 반응하게 하려면
@@ -87,16 +87,14 @@ python -m stt.run --mic --model small         # 한국어는 small 권장
 
 | 항목 | 기본값 | 효과 |
 |------|--------|------|
-| 모델 | `small` (was base) | 한국어 키워드 인식률↑ (base는 너무 약함) |
-| `hotwords` | ON (긴급어 가중) | 도로 소음에서 긴급어 검출↑ (저비용) |
+| 모델 | `small` (was base) | 한국어 인식 정확도↑ (base는 너무 약함) |
 | RMS 정규화 | ON | 먼/조용한 음성을 키워 **범위↑** |
 | VAD 임계값 | 0.01→**0.005** | 더 멀고 작은 음성도 Whisper 까지 도달 |
 | 환각 가드 | 명시 유지 | 게이트 넓혀도 헛인식 안 새게 |
-| 키워드 매칭 | 자모 fuzzy + 대표어 | "구금차"→"구급차" 처럼 **오인식해도 알림 유지** |
 
 **더 강하게(속도 양보):**
 ```bash
-python -m stt.run --mic --respeaker --accuracy           # beam 5 + 도메인 프롬프트
+python -m stt.run --mic --respeaker --accuracy           # beam 5 + 정규화
 python -m stt.run --mic --respeaker --model medium        # 8GB 메모리·지연 보드에서 측정 후
 python -m stt.run --mic --respeaker --beam 3              # beam 직접 지정
 ```
@@ -108,7 +106,7 @@ python -m stt.run --mic --respeaker --beam 3              # beam 직접 지정
 4. **SNR-게이트 DeepFilterNet 디노이징** (range/med) — **기본 OFF**, 저SNR(<~12dB)에서만. 실차 녹음으로 A/B 후 결정(Orin CPU 부하 측정 필수).
 5. **모델 large-v3-turbo** 평가 (accuracy) — 멀티링궐·4 디코더층, int8 ~1.5GB. 지연 허용되면.
 
-> 안전 맥락: "오인식해도 키워드는 놓치지 않는" fuzzy 매칭 + hotwords 가 체감상 가장 가치 큼. 디노이징·큰 모델은 **반드시 실차 녹음으로 검증 후** 적용.
+> 범위·정확도엔 ① ReSpeaker DSP 튜닝, ② 적응형 VAD가 체감상 가장 큼. 디노이징·큰 모델은 **반드시 실차 녹음으로 검증 후** 적용.
 
 ## 두 갈래로 보면 간단
 | 목적 | 방법 | 난이도 |

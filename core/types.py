@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -96,34 +96,23 @@ class ApproachResult:
 # ---------------------------------------------------------------------------
 @dataclass
 class SpeechResult:
-    """STT 모듈의 출력.
-
-    주변 음성(경찰 확성기·외침·안내방송 등)을 텍스트로 바꾸고,
-    그 안에서 운전 관련 '긴급 키워드'(구급차/비키세요/정지 등)를 짚어 준다.
+    """STT 모듈의 출력 — 주변 음성을 '텍스트로' 바꾼 결과.
 
     text      : 인식된 문장. 음성이 없거나 인식 실패면 "".
     is_speech : 음성이 감지됐는지(무음 게이트 통과 여부).
-    keywords  : 텍스트에서 찾은 긴급 키워드 목록(없으면 빈 리스트).
     confidence: 0.0 ~ 1.0 (엔진이 주면, 없으면 0.0).
     lang      : 인식 언어 코드(예: "ko"). 모르면 None.
     """
     text: str = ""
     is_speech: bool = False
-    keywords: List[str] = field(default_factory=list)
     confidence: float = 0.0
     lang: Optional[str] = None
 
-    @property
-    def is_alert(self) -> bool:
-        """긴급 키워드가 하나라도 있으면 True."""
-        return bool(self.keywords)
-
     def to_korean(self) -> str:
-        """예: '"앞에 구급차 지나갑니다" ⚠️긴급'  /  음성 없으면 '(음성 없음)'."""
+        """예: '"앞에 차가 지나갑니다"'  /  음성 없으면 '(음성 없음)'."""
         if not self.is_speech or not self.text:
             return "(음성 없음)"
-        tag = "  ⚠️긴급" if self.is_alert else ""
-        return f"\"{self.text}\"{tag}"
+        return f"\"{self.text}\""
 
 
 # ---------------------------------------------------------------------------

@@ -128,8 +128,8 @@ python -m stt.run --mic --respeaker            # ch0 자동, GPU 있으면 자�
 python -m stt.run --mic --respeaker --device 2 # 자동 탐지 실패 시 인덱스 지정
 ```
 - 코드 기본값(`device="auto"`)이 `ctranslate2.get_cuda_device_count()` 로 **cuda/cpu 자동 선택** → 노트북·보드 동일 코드.
-- 보드 권장 프로파일: `STTConfig.for_jetson()` = **small + cuda + int8_float16** (8GB 통합메모리에 적합).
-  한국어는 Whisper 난이도가 높아 `base` 보다 `small` 이 키워드 검출에 안정적.
+- 보드 권장 프로파일: `STTConfig.for_jetson()` = **small + cuda + float16** (Orin Tensor 코어 100% 활용, 최상급 정확도). 8GB 가 빡빡하면 `int8_float16` 으로.
+  한국어는 Whisper 난이도가 높아 `base` 보다 `small` 이 인식 정확도에 안정적.
 
 ## 6. 트러블슈팅
 

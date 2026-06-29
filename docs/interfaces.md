@@ -46,12 +46,10 @@ motion: Motion           # approaching | receding | steady | unknown
 ```
 text: str                # 인식된 문장 (없으면 "")
 is_speech: bool          # 음성이 감지됐는지
-keywords: list[str]      # 긴급 키워드 (예: ["구급차"])
 confidence: float        # 0.0 ~ 1.0
 lang: str | None         # 인식 언어 (예: "ko")
 
-.is_alert    →  긴급 키워드가 하나라도 있으면 True
-.to_korean() →  예: '"앞에 구급차 지나갑니다"  ⚠️긴급'
+.to_korean() →  예: '"앞에 차가 지나갑니다"'
 ```
 
 ---

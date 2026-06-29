@@ -2,18 +2,21 @@
 STT 모듈 테스트.
 
 faster-whisper 없이도(오프라인·CPU) 돌아가게, 엔진은 '가짜 엔진'을 주입한다.
-검증 대상: SpeechResult 동작 / 키워드 스포팅 / 무음 게이트 / 발화 버퍼링.
+검증 대상: SpeechResult 동작 / 무음 게이트 / 발화 버퍼링 / 정규화 / 디바이스·프로파일.
 """
 
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from core.types import AudioChunk, SpeechResult, SAMPLE_RATE
-from stt.config import STTConfig, EMERGENCY_PROMPT
+from stt.config import STTConfig
 from stt.device import resolve_runtime
-from stt.keywords import find_keywords
-from stt.transcriber import Transcriber, transcribe_array, _normalize_rms, _rms
+from stt.transcriber import (
+    Transcriber, transcribe_array, FasterWhisperEngine,
+    _normalize_rms, _rms, _fallback_chain, _looks_like_oom,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +25,7 @@ from stt.transcriber import Transcriber, transcribe_array, _normalize_rms, _rms
 class FakeEngine:
     """호출 횟수를 세고, 정해진 텍스트를 돌려주는 가짜 STT 엔진."""
 
-    def __init__(self, text="앞에 구급차 지나갑니다", lang="ko"):
+    def __init__(self, text="앞에 차가 지나갑니다", lang="ko"):
         self.text = text
         self.lang = lang
         self.calls = 0
@@ -47,44 +50,22 @@ def _silent_chunk(seconds=1.0, sr=SAMPLE_RATE):
 
 
 # ---------------------------------------------------------------------------
-# SpeechResult
+# SpeechResult (순수 텍스트)
 # ---------------------------------------------------------------------------
 def test_speechresult_defaults():
     r = SpeechResult()
     assert r.text == "" and r.is_speech is False
-    assert r.keywords == [] and r.is_alert is False
     assert r.to_korean() == "(음성 없음)"
 
 
-def test_speechresult_alert_and_korean():
-    r = SpeechResult(text="앞에 구급차 지나갑니다", is_speech=True, keywords=["구급차"])
-    assert r.is_alert is True
-    assert "구급차" in r.to_korean() and "⚠️긴급" in r.to_korean()
-
-
-def test_speechresult_speech_without_keyword_not_alert():
+def test_speechresult_to_korean():
     r = SpeechResult(text="날씨가 좋네요", is_speech=True)
-    assert r.is_alert is False
     assert r.to_korean() == '"날씨가 좋네요"'
 
 
-# ---------------------------------------------------------------------------
-# 키워드 스포팅
-# ---------------------------------------------------------------------------
-def test_find_keywords_basic_and_inflection():
-    assert find_keywords("앞에 구급차 지나갑니다") == ["구급차"]
-    # 변형 "비키" 가 잡히면 대표어 "비키세요" 로 알림
-    assert find_keywords("빨리 비키세요!") == ["비키세요"]
-
-
-def test_find_keywords_dedup_and_order():
-    out = find_keywords("정지! 정지! 사고 났어요")
-    assert out == ["정지", "사고"]   # 등장 순서, 중복 제거
-
-
-def test_find_keywords_empty_and_none():
-    assert find_keywords("") == []
-    assert find_keywords("그냥 평범한 대화") == []
+def test_speechresult_empty_text_is_no_voice():
+    r = SpeechResult(text="", is_speech=True)
+    assert r.to_korean() == "(음성 없음)"
 
 
 # ---------------------------------------------------------------------------
@@ -101,8 +82,8 @@ def test_silence_does_not_call_engine():
 # ---------------------------------------------------------------------------
 # 발화 버퍼링 + flush
 # ---------------------------------------------------------------------------
-def test_speech_then_silence_flushes_once_with_keywords():
-    eng = FakeEngine(text="앞에 구급차 지나갑니다")
+def test_speech_then_silence_flushes_once():
+    eng = FakeEngine(text="앞에 차가 지나갑니다")
     t = Transcriber(engine=eng)
 
     # 음성 2초 누적 → 아직 인식 전(엔진 호출 0)
@@ -115,8 +96,7 @@ def test_speech_then_silence_flushes_once_with_keywords():
     r3 = t.transcribe(_silent_chunk())
     assert eng.calls == 1
     assert r3.is_speech is True
-    assert r3.text == "앞에 구급차 지나갑니다"
-    assert r3.keywords == ["구급차"] and r3.is_alert is True
+    assert r3.text == "앞에 차가 지나갑니다"
     assert eng.last_len == int(SAMPLE_RATE * 2)   # 2초어치를 통째로 인식
 
 
@@ -154,70 +134,25 @@ def test_flush_on_stream_end():
     assert eng.calls == 1 and tail.is_speech is True
 
 
+def test_on_status_fires_transcribing_only_when_engine_runs():
+    events = []
+    eng = FakeEngine()
+    t = Transcriber(engine=eng, on_status=events.append)
+    t.transcribe(_voice_chunk())          # 버퍼링 중 — 아직 변환 전
+    assert events == []
+    t.transcribe(_silent_chunk())         # 발화 끝 → flush → 엔진 실행
+    assert events == ["transcribing"]
+
+
 # ---------------------------------------------------------------------------
 # 단발(파일) 인식 헬퍼
 # ---------------------------------------------------------------------------
 def test_transcribe_array_with_fake_engine():
-    eng = FakeEngine(text="빨리 비키세요")
+    eng = FakeEngine(text="빨리 와 주세요")
     samples = np.ones(int(SAMPLE_RATE * 1.5), dtype=np.float32) * 0.2
     r = transcribe_array(samples, engine=eng)
     assert r.is_speech is True
-    assert r.text == "빨리 비키세요"
-    assert r.keywords == ["비키세요"]
-
-
-# ---------------------------------------------------------------------------
-# 디바이스 자동 결정 (노트북 CPU ↔ Jetson CUDA)
-# ---------------------------------------------------------------------------
-def test_resolve_runtime_auto_cpu_when_no_cuda():
-    assert resolve_runtime("auto", "auto", cuda=False) == ("cpu", "int8")
-
-
-def test_resolve_runtime_auto_cuda_when_present():
-    # Orin Nano 8GB 권장: 혼합 int8/FP16
-    assert resolve_runtime("auto", "auto", cuda=True) == ("cuda", "int8_float16")
-
-
-def test_resolve_runtime_explicit_overrides_win():
-    # device/compute_type 를 명시하면 감지 결과와 무관하게 그대로 쓴다
-    assert resolve_runtime("cpu", "int8", cuda=True) == ("cpu", "int8")
-    assert resolve_runtime("cuda", "float16", cuda=False) == ("cuda", "float16")
-
-
-def test_resolve_runtime_auto_compute_follows_explicit_device():
-    # device 만 cuda 로 정하고 compute_type 은 auto → int8_float16
-    assert resolve_runtime("cuda", "auto", cuda=False) == ("cuda", "int8_float16")
-
-
-def test_for_jetson_profile():
-    cfg = STTConfig.for_jetson()
-    assert cfg.device == "cuda" and cfg.compute_type == "int8_float16"
-    assert cfg.model_size == "small"
-
-
-# ---------------------------------------------------------------------------
-# 정확도/범위: fuzzy 키워드 매칭
-# ---------------------------------------------------------------------------
-def test_fuzzy_keyword_one_char_error():
-    # STT 가 1글자 틀려도(구급차→구금차) 알림은 살아야 함
-    assert "구급차" in find_keywords("앞에 구금차 지나가요")
-
-
-def test_fuzzy_keyword_spacing_variants():
-    # 띄어쓰기 차이 무시 → 대표어로
-    assert "차 세우세요" in find_keywords("차세워 빨리")
-    assert "비키세요" in find_keywords("비켜 주세요")
-
-
-def test_fuzzy_disabled_falls_back_to_substring():
-    # fuzzy=False 면 오타는 안 잡힌다(부분 문자열만)
-    assert find_keywords("앞에 구금차 지나가요", fuzzy=False) == []
-    assert find_keywords("앞에 구급차 지나가요", fuzzy=False) == ["구급차"]
-
-
-def test_fuzzy_no_false_positive_on_plain_text():
-    assert find_keywords("오늘 날씨가 정말 좋네요") == []
-    assert find_keywords("그냥 평범한 대화였어요") == []
+    assert r.text == "빨리 와 주세요"
 
 
 # ---------------------------------------------------------------------------
@@ -242,12 +177,38 @@ def test_normalize_clips_to_unit_range():
 
 
 # ---------------------------------------------------------------------------
-# 정확도/범위 프로파일 + 환각 가드 기본값
+# 디바이스 자동 결정 (노트북 CPU ↔ Jetson CUDA)
 # ---------------------------------------------------------------------------
+def test_resolve_runtime_auto_cpu_when_no_cuda():
+    assert resolve_runtime("auto", "auto", cuda=False) == ("cpu", "int8")
+
+
+def test_resolve_runtime_auto_cuda_when_present():
+    # Orin Nano(Ampere) 설정: float16 (Tensor 코어 100% 활용)
+    assert resolve_runtime("auto", "auto", cuda=True) == ("cuda", "float16")
+
+
+def test_resolve_runtime_explicit_overrides_win():
+    assert resolve_runtime("cpu", "int8", cuda=True) == ("cpu", "int8")
+    assert resolve_runtime("cuda", "int8_float16", cuda=False) == ("cuda", "int8_float16")
+
+
+def test_resolve_runtime_auto_compute_follows_explicit_device():
+    assert resolve_runtime("cuda", "auto", cuda=False) == ("cuda", "float16")
+
+
+# ---------------------------------------------------------------------------
+# 프로파일 + 기본값
+# ---------------------------------------------------------------------------
+def test_for_jetson_profile():
+    cfg = STTConfig.for_jetson()
+    assert cfg.device == "cuda" and cfg.compute_type == "float16"
+    assert cfg.model_size == "small"
+
+
 def test_for_accuracy_profile():
     cfg = STTConfig.for_accuracy()
     assert cfg.beam_size == 5
-    assert cfg.initial_prompt == EMERGENCY_PROMPT
     assert cfg.normalize_audio is True
 
 
@@ -258,10 +219,96 @@ def test_for_accuracy_keeps_base_device_model():
     assert acc.beam_size == 5                                    # 정확도만 올림
 
 
-def test_defaults_are_accuracy_range_leaning():
+def test_quality_defaults():
     cfg = STTConfig()
     assert cfg.model_size == "small"          # base→small (한국어 최소)
-    assert cfg.hotwords is not None           # 긴급어 가중 기본 ON
     assert cfg.normalize_audio is True        # 범위↑
     assert cfg.vad_rms_threshold == 0.005     # 낮춰서 먼 음성 도달
     assert cfg.no_speech_threshold == 0.6     # 환각 가드는 유지(끄지 않음)
+
+
+# ---------------------------------------------------------------------------
+# OOM 자동 폴백 (float16 → int8_float16 → int8 → cpu/int8)
+# ---------------------------------------------------------------------------
+class _FakeModel:
+    def __init__(self, compute_type, text="테스트"):
+        self.compute_type = compute_type
+        self._text = text
+
+    def transcribe(self, samples, **kwargs):
+        seg = type("S", (), {"text": self._text, "avg_logprob": -0.2})()
+        info = type("I", (), {"language": "ko"})()
+        return [seg], info
+
+
+def _factory_oom_on(oom_types):
+    """cuda 에서 compute_type 이 oom_types 에 들면 OOM 을 던지는 가짜 WhisperModel 팩토리.
+    (cpu 는 항상 성공 — 최후 폴백이 도달함을 검증하기 위해)"""
+    def factory(model_size, device, compute_type, cpu_threads=0, num_workers=1):
+        if device == "cuda" and compute_type in oom_types:
+            raise RuntimeError("CUDA failed with error out of memory")
+        return _FakeModel(compute_type)
+    return factory
+
+
+def test_fallback_chain_cuda_float16():
+    assert _fallback_chain("cuda", "float16") == [
+        ("cuda", "float16"), ("cuda", "int8_float16"), ("cuda", "int8"), ("cpu", "int8")
+    ]
+
+
+def test_fallback_chain_cpu_is_single():
+    assert _fallback_chain("cpu", "int8") == [("cpu", "int8")]
+
+
+def test_looks_like_oom():
+    assert _looks_like_oom(RuntimeError("CUDA failed with error out of memory"))
+    assert _looks_like_oom(RuntimeError("an illegal memory access was encountered"))
+    assert not _looks_like_oom(ValueError("bad argument"))
+
+
+def test_engine_load_oom_falls_back_one_step():
+    cfg = STTConfig(device="cuda", compute_type="float16")
+    eng = FasterWhisperEngine(cfg, model_factory=_factory_oom_on({"float16"}))
+    assert (eng._device, eng._compute_type) == ("cuda", "int8_float16")
+    text, _, lang = eng.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
+    assert text == "테스트" and lang == "ko"
+
+
+def test_engine_load_oom_falls_back_to_cpu_when_all_cuda_fail():
+    cfg = STTConfig(device="cuda", compute_type="float16")
+    eng = FasterWhisperEngine(
+        cfg, model_factory=_factory_oom_on({"float16", "int8_float16", "int8"}))
+    assert (eng._device, eng._compute_type) == ("cpu", "int8")
+
+
+def test_engine_non_oom_error_is_not_swallowed():
+    cfg = STTConfig(device="cuda", compute_type="float16")
+
+    def bad_factory(model_size, device, compute_type, cpu_threads=0, num_workers=1):
+        raise ValueError("관계없는 버그")
+
+    with pytest.raises(ValueError):
+        FasterWhisperEngine(cfg, model_factory=bad_factory)
+
+
+def test_engine_transcribe_oom_rebuilds_and_retries():
+    # 로드는 float16 성공하지만 transcribe 가 OOM → int8_float16 재빌드 후 복구
+    class _FlakyModel:
+        def __init__(self, compute_type):
+            self.compute_type = compute_type
+
+        def transcribe(self, samples, **kwargs):
+            if self.compute_type == "float16":
+                raise RuntimeError("CUDA failed: an illegal memory access")
+            return _FakeModel(self.compute_type, text="복구됨").transcribe(samples)
+
+    def factory(model_size, device, compute_type, cpu_threads=0, num_workers=1):
+        return _FlakyModel(compute_type)
+
+    cfg = STTConfig(device="cuda", compute_type="float16")
+    eng = FasterWhisperEngine(cfg, model_factory=factory)
+    assert eng._compute_type == "float16"      # 로드는 성공
+    text, _, _ = eng.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
+    assert text == "복구됨"
+    assert eng._compute_type == "int8_float16"  # 변환 OOM 후 폴백됨

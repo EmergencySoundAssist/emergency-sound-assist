@@ -45,9 +45,9 @@ def resolve_runtime(
     if compute_type != "auto":
         ct = compute_type
     elif dev == "cuda":
-        # Orin Nano 8GB 권장: 혼합 int8/FP16 — 빠르고 통합메모리 적게 씀.
-        # 최대 정확도가 필요하고 메모리 여유 있으면 "float16" 으로.
-        ct = "int8_float16"
+        # Orin Nano(Ampere/SM8.7) 설정: float16 — Tensor 코어 100% 활용, 최상급 한국어 정확도.
+        # 단, 통합 8GB 를 더 쓴다. 여러 모듈을 한 보드에 올려 OOM 이면 "int8_float16" 으로 내릴 것.
+        ct = "float16"
     else:
         ct = "int8"      # CPU 는 int8 이 가장 가벼움
     return dev, ct

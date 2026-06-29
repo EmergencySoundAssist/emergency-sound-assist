@@ -2,7 +2,7 @@
 ④ STT(음성→텍스트) 모듈 —— 담당: 천자민.
 
   - 입력: 시간에 따른 AudioChunk 흐름 (1초 모노 16kHz)
-  - 출력: SpeechResult (텍스트 + 긴급 키워드)
+  - 출력: SpeechResult (텍스트)
 
 1초 청크는 STT 엔진에 너무 짧다. 그래서 ApproachDetector 처럼 '상태를 가진'
 클래스로 두고, 음성이 이어지는 동안 모았다가(발화 단위) 한 번에 인식한다.
@@ -17,14 +17,13 @@
 from __future__ import annotations
 
 import sys
-from typing import List, Optional, Protocol, Tuple
+from typing import Callable, List, Optional, Protocol, Tuple
 
 import numpy as np
 
 from core.types import AudioChunk, SpeechResult
 from .config import STTConfig
 from .device import resolve_runtime
-from .keywords import find_keywords
 
 
 # ---------------------------------------------------------------------------
@@ -37,61 +36,125 @@ class _Engine(Protocol):
         ...
 
 
+# CUDA 메모리 부족/관련 에러로 보이는 메시지 조각 (대소문자 무시).
+_OOM_HINTS = (
+    "out of memory", "illegal memory", "cublas", "cudnn", "alloc",
+    "cuda failed", "cuda error", "device memory", "oom",
+)
+
+
+def _looks_like_oom(exc: Exception) -> bool:
+    """예외가 (CUDA) 메모리 부족 계열인지 대략 판별."""
+    msg = str(exc).lower()
+    return any(h in msg for h in _OOM_HINTS)
+
+
+def _fallback_chain(device: str, compute_type: str):
+    """정확도 high → 안전 순으로 (device, compute_type) 폴백 체인.
+
+    Orin Nano 통합 8GB 가 꽉 차면(다른 AI 모델 동시 구동) float16 부터 차례로 내려간다:
+      cuda/float16 → cuda/int8_float16 → cuda/int8 → cpu/int8(최후 안전망)
+    """
+    if device != "cuda":
+        return [(device, compute_type)]
+    order = ["float16", "int8_float16", "int8"]
+    if compute_type in order:
+        chain = [("cuda", ct) for ct in order[order.index(compute_type):]]
+    else:
+        chain = [("cuda", compute_type)] + [("cuda", ct) for ct in order]
+    chain.append(("cpu", "int8"))     # GPU 가 끝내 모자라면 CPU 로(느려도 안 죽음)
+    return chain
+
+
 class FasterWhisperEngine:
-    """faster-whisper 래퍼. 무거운 import 는 생성 시점에만 일어난다."""
+    """faster-whisper 래퍼. 무거운 import 는 생성 시점에만 일어난다.
 
-    def __init__(self, cfg: STTConfig):
-        from faster_whisper import WhisperModel  # 지연 import: 설치 안 해도 모듈 로드 가능
+    메모리 부족(OOM/Illegal Memory Access)이 나면 더 가벼운 정밀도로 자동 폴백한다.
+    로드 시점과 변환 시점 모두 대응.
+    """
 
-        # "auto" 면 노트북=cpu/int8, Jetson(GPU)=cuda/float16 으로 결정.
+    def __init__(self, cfg: STTConfig, model_factory=None):
+        self._cfg = cfg
+        if model_factory is None:                 # 지연 import(설치 안 해도 모듈 로드 가능)
+            from faster_whisper import WhisperModel
+            model_factory = WhisperModel
+        self._factory = model_factory
+
         device, compute_type = resolve_runtime(cfg.device, cfg.compute_type)
-        print(f"[stt] 엔진 로드: {cfg.model_size} on {device}/{compute_type}"
-              f" (cpu_threads={cfg.cpu_threads})", file=sys.stderr)
-        self._model = WhisperModel(
-            cfg.model_size, device=device, compute_type=compute_type,
-            cpu_threads=cfg.cpu_threads, num_workers=cfg.num_workers,
-        )
+        self._chain = _fallback_chain(device, compute_type)
+        self._ci = 0                              # 현재 폴백 단계
+        self._model = None
+        self._device = device
+        self._compute_type = compute_type
+
         self._language = cfg.language
         self._beam_size = cfg.beam_size
-        self._initial_prompt = cfg.initial_prompt
-        self._hotwords = cfg.hotwords
         self._no_speech_threshold = cfg.no_speech_threshold
         self._log_prob_threshold = cfg.log_prob_threshold
         self._compression_ratio_threshold = cfg.compression_ratio_threshold
 
+        self._build_with_fallback()
+
+    # -- 모델 로드 (OOM 폴백) ----------------------------------------------
+    def _build_with_fallback(self) -> None:
+        while True:
+            device, ct = self._chain[self._ci]
+            try:
+                print(f"[stt] 엔진 로드: {self._cfg.model_size} on {device}/{ct}"
+                      f" (cpu_threads={self._cfg.cpu_threads})", file=sys.stderr)
+                self._model = self._factory(
+                    self._cfg.model_size, device=device, compute_type=ct,
+                    cpu_threads=self._cfg.cpu_threads, num_workers=self._cfg.num_workers,
+                )
+                self._device, self._compute_type = device, ct
+                return
+            except Exception as e:                # noqa: BLE001 — 폴백 판단 후 재-raise
+                if not _looks_like_oom(e) or self._ci + 1 >= len(self._chain):
+                    raise
+                nd, nc = self._chain[self._ci + 1]
+                print(f"[stt] ⚠️ 메모리 부족({device}/{ct}) → {nd}/{nc} 폴백: {e}",
+                      file=sys.stderr)
+                self._ci += 1
+
+    def _advance_or_raise(self, exc: Exception) -> None:
+        """변환 중 OOM → 다음 단계로 재빌드. 더 내려갈 곳 없으면 그대로 raise."""
+        if not _looks_like_oom(exc) or self._ci + 1 >= len(self._chain):
+            raise exc
+        nd, nc = self._chain[self._ci + 1]
+        print(f"[stt] ⚠️ 변환 중 메모리 부족({self._device}/{self._compute_type}) "
+              f"→ {nd}/{nc} 폴백", file=sys.stderr)
+        self._ci += 1
+        self._build_with_fallback()
+
+    # -- 인식 (변환 시점 OOM 폴백) -----------------------------------------
     def transcribe(
         self, samples: np.ndarray, sample_rate: int
     ) -> Tuple[str, float, Optional[str]]:
-        # faster-whisper 는 16kHz 모노 float32 numpy 를 직접 받는다.
-        # condition_on_previous_text=False: 발화 단위로 독립 인식 → 노이즈에서 반복/환각 줄고 약간 빠름.
-        kwargs = dict(
-            language=self._language, beam_size=self._beam_size,
-            condition_on_previous_text=False,
-            # 환각 가드(기본값 명시). 끄면 VAD 넓힌 만큼 노이즈→헛인식이 새므로 유지.
-            no_speech_threshold=self._no_speech_threshold,
-            log_prob_threshold=self._log_prob_threshold,
-            compression_ratio_threshold=self._compression_ratio_threshold,
-        )
-        if self._initial_prompt:
-            kwargs["initial_prompt"] = self._initial_prompt   # 도메인 편향(정확도↑)
-        if self._hotwords:
-            kwargs["hotwords"] = self._hotwords               # 키워드 가중
-        try:
-            segments, info = self._model.transcribe(samples, **kwargs)
-        except TypeError:
-            # 구버전 faster-whisper 가 hotwords 를 모르면 빼고 재시도.
-            kwargs.pop("hotwords", None)
-            segments, info = self._model.transcribe(samples, **kwargs)
-        segs = list(segments)
-        text = " ".join(s.text.strip() for s in segs).strip()
-        # avg_logprob(로그확률) → exp 로 대략적인 0~1 신뢰도.
-        if segs:
-            conf = float(np.mean([np.exp(s.avg_logprob) for s in segs]))
-            conf = max(0.0, min(1.0, conf))
-        else:
-            conf = 0.0
-        lang = getattr(info, "language", None)
-        return text, conf, lang
+        while True:
+            try:
+                # faster-whisper 는 16kHz 모노 float32 numpy 를 직접 받는다.
+                # condition_on_previous_text=False: 발화 단위 독립 인식(반복/환각↓).
+                segments, info = self._model.transcribe(
+                    samples, language=self._language, beam_size=self._beam_size,
+                    condition_on_previous_text=False,
+                    # 환각 가드(기본값 명시). 끄면 VAD 넓힌 만큼 노이즈→헛인식이 샌다.
+                    no_speech_threshold=self._no_speech_threshold,
+                    log_prob_threshold=self._log_prob_threshold,
+                    compression_ratio_threshold=self._compression_ratio_threshold,
+                )
+                segs = list(segments)
+            except Exception as e:                # noqa: BLE001
+                self._advance_or_raise(e)         # OOM 이면 더 가벼운 정밀도로 재빌드 후 재시도
+                continue
+            text = " ".join(s.text.strip() for s in segs).strip()
+            # avg_logprob(로그확률) → exp 로 대략적인 0~1 신뢰도.
+            if segs:
+                conf = float(np.mean([np.exp(s.avg_logprob) for s in segs]))
+                conf = max(0.0, min(1.0, conf))
+            else:
+                conf = 0.0
+            lang = getattr(info, "language", None)
+            return text, conf, lang
 
 
 # ---------------------------------------------------------------------------
@@ -129,12 +192,18 @@ def _normalize_rms(x: np.ndarray, target_rms: float, max_gain: float) -> np.ndar
 class Transcriber:
     """연속 청크를 받아 발화 단위로 텍스트를 인식. transcribe(chunk) → SpeechResult."""
 
-    def __init__(self, config: Optional[STTConfig] = None, engine: Optional[_Engine] = None):
+    def __init__(self, config: Optional[STTConfig] = None, engine: Optional[_Engine] = None,
+                 on_status: Optional[Callable[[str], None]] = None):
         self.cfg = config or STTConfig()
         self._engine = engine          # 주입 가능(테스트). None 이면 첫 인식 때 lazy-load.
+        self._on_status = on_status    # 상태 콜백("transcribing" 등) — UI 표시용
         self._buf: List[np.ndarray] = []   # 음성이 이어지는 동안 누적
         self._silence_run = 0              # 음성 이후 연속 무음 청크 수
         self._had_speech = False           # 현재 버퍼에 음성이 들어있는지
+
+    def _emit(self, status: str) -> None:
+        if self._on_status:
+            self._on_status(status)
 
     # -- 공개 API (인터페이스 약속) ----------------------------------------
     def transcribe(self, chunk: AudioChunk) -> SpeechResult:
@@ -185,18 +254,10 @@ class Transcriber:
         if self.cfg.normalize_audio:              # 먼/조용한 음성 살리기(범위↑)
             audio = _normalize_rms(audio, self.cfg.target_rms, self.cfg.max_gain)
 
+        self._emit("transcribing")                # UI: '변환 중' 표시 (엔진 호출은 블로킹)
         text, conf, lang = self._get_engine().transcribe(audio, sr)
         text = (text or "").strip()
-        if not text:
-            return SpeechResult(is_speech=True, text="", confidence=conf, lang=lang)
-
-        return SpeechResult(
-            is_speech=True,
-            text=text,
-            keywords=find_keywords(text),
-            confidence=conf,
-            lang=lang,
-        )
+        return SpeechResult(is_speech=True, text=text, confidence=conf, lang=lang)
 
     def _get_engine(self) -> _Engine:
         if self._engine is None:
@@ -219,8 +280,4 @@ def transcribe_array(
     audio = _to_mono(samples)
     text, conf, lang = eng.transcribe(audio, sample_rate)
     text = (text or "").strip()
-    if not text:
-        return SpeechResult(is_speech=bool(audio.size), text="", confidence=conf, lang=lang)
-    return SpeechResult(
-        is_speech=True, text=text, keywords=find_keywords(text), confidence=conf, lang=lang
-    )
+    return SpeechResult(is_speech=bool(audio.size), text=text, confidence=conf, lang=lang)
