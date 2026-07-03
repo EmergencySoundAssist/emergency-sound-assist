@@ -17,6 +17,8 @@ from stt.transcriber import (
     Transcriber, transcribe_array, FasterWhisperEngine,
     _normalize_rms, _rms, _fallback_chain, _looks_like_oom,
 )
+from stt.vad import EnergyVad, WebRtcVad, make_vad
+from audio.capture import iter_chunks_threaded
 
 
 # ---------------------------------------------------------------------------
@@ -203,13 +205,12 @@ def test_resolve_runtime_auto_compute_follows_explicit_device():
 def test_for_jetson_profile():
     cfg = STTConfig.for_jetson()
     assert cfg.device == "cuda" and cfg.compute_type == "float16"
-    assert cfg.model_size == "small"
+    assert cfg.model_size == "large-v3-turbo"
 
 
 def test_for_accuracy_profile():
     cfg = STTConfig.for_accuracy()
     assert cfg.beam_size == 5
-    assert cfg.normalize_audio is True
 
 
 def test_for_accuracy_keeps_base_device_model():
@@ -221,10 +222,74 @@ def test_for_accuracy_keeps_base_device_model():
 
 def test_quality_defaults():
     cfg = STTConfig()
-    assert cfg.model_size == "small"          # base→small (한국어 최소)
-    assert cfg.normalize_audio is True        # 범위↑
-    assert cfg.vad_rms_threshold == 0.005     # 낮춰서 먼 음성 도달
+    assert cfg.model_size == "medium"         # small은 한국어 인식 약함(실측)
+    assert cfg.normalize_audio is False       # 정규화는 역효과라 기본 OFF
+    assert cfg.vad_rms_threshold == 0.02      # 너무 낮추면 노이즈→환각
     assert cfg.no_speech_threshold == 0.6     # 환각 가드는 유지(끄지 않음)
+
+
+# ---------------------------------------------------------------------------
+# VAD (교체 가능: webrtcvad / energy)
+# ---------------------------------------------------------------------------
+class _FakeWebrtc:
+    """compute 없이 정해진 값을 돌려주는 가짜 webrtcvad.Vad."""
+    def __init__(self, result):
+        self._r = result
+
+    def is_speech(self, frame, sr):
+        return self._r
+
+
+def test_energy_vad():
+    v = EnergyVad(threshold=0.02)
+    assert v.is_speech(np.ones(1000, dtype=np.float32) * 0.2, SAMPLE_RATE) is True
+    assert v.is_speech(np.zeros(1000, dtype=np.float32), SAMPLE_RATE) is False
+
+
+def test_webrtcvad_all_voiced_is_speech():
+    v = WebRtcVad(voiced_ratio=0.2, _impl=_FakeWebrtc(True))
+    assert v.is_speech(np.ones(SAMPLE_RATE, dtype=np.float32) * 0.2, SAMPLE_RATE) is True
+
+
+def test_webrtcvad_none_voiced_not_speech():
+    v = WebRtcVad(voiced_ratio=0.2, _impl=_FakeWebrtc(False))
+    assert v.is_speech(np.ones(SAMPLE_RATE, dtype=np.float32) * 0.2, SAMPLE_RATE) is False
+
+
+def test_make_vad_energy_backend():
+    cfg = STTConfig(vad_backend="energy")
+    assert isinstance(make_vad(cfg), EnergyVad)
+
+
+def test_make_vad_auto_falls_back_when_no_webrtc(monkeypatch):
+    # webrtcvad import 를 실패시켜 auto → energy 폴백 확인
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "webrtcvad":
+            raise ImportError("no webrtcvad")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert isinstance(make_vad(STTConfig(vad_backend="auto")), EnergyVad)
+
+
+# ---------------------------------------------------------------------------
+# 스레드 캡처 (변환 중에도 입력 안 끊김)
+# ---------------------------------------------------------------------------
+def test_iter_chunks_threaded_preserves_order():
+    out = list(iter_chunks_threaded(iter(range(50))))
+    assert out == list(range(50))
+
+
+def test_iter_chunks_threaded_propagates_error():
+    def bad():
+        yield 1
+        raise RuntimeError("capture died")
+
+    with pytest.raises(RuntimeError):
+        list(iter_chunks_threaded(bad()))
 
 
 # ---------------------------------------------------------------------------

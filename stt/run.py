@@ -55,7 +55,7 @@ def run_wav(path: str, cfg: STTConfig) -> None:
 
 
 def run_mic(cfg: STTConfig, respeaker: bool = False, device: int | None = None,
-            meter: bool = True) -> None:
+            meter: bool = True, thread: bool = True) -> None:
     src = "ReSpeaker(ch0)" if respeaker else "기본 마이크"
     print(f"엔진: {cfg.engine}({cfg.model_size}) | {src} 입력 시작 (Ctrl+C 종료)\n")
 
@@ -71,6 +71,8 @@ def run_mic(cfg: STTConfig, respeaker: bool = False, device: int | None = None,
     transcriber = Transcriber(config=cfg, on_status=on_status)
     stream = (capture.iter_chunks_from_respeaker(device=device) if respeaker
               else capture.iter_chunks_from_mic(device=device))
+    if thread:                                   # 변환 중에도 캡처 안 끊기게(별도 스레드)
+        stream = capture.iter_chunks_threaded(stream)
     try:
         for chunk in stream:
             flushing["on"] = False
@@ -107,9 +109,12 @@ def main() -> None:
     ap.add_argument("--device", type=int, default=None, help="입력 장치 인덱스(미지정 시 자동)")
     ap.add_argument("--cpu", action="store_true", help="GPU 무시하고 CPU 강제")
     ap.add_argument("--threads", type=int, default=None, help="CPU 스레드 수(Orin 6코어면 6). 속도↑")
-    ap.add_argument("--accuracy", action="store_true", help="정확도·범위 우선(beam↑+정규화, 속도 양보)")
+    ap.add_argument("--accuracy", action="store_true", help="정확도 우선(beam↑, 속도 양보)")
     ap.add_argument("--beam", type=int, default=None, help="beam_size 직접 지정(정확도↑/속도↓)")
+    ap.add_argument("--vad", type=float, default=None, help="VAD 임계값(기본 0.02). 조용한 실내면 ↓, 도로면 ↑")
+    ap.add_argument("--normalize", action="store_true", help="RMS 정규화 켜기(입력이 일관되게 작을 때만)")
     ap.add_argument("--no-meter", action="store_true", help="라이브 음량 미터/상태 표시 끄기")
+    ap.add_argument("--no-thread", action="store_true", help="캡처 스레드 끄기(변환 중 입력 끊김 허용)")
     args = ap.parse_args()
 
     cfg = STTConfig()
@@ -121,15 +126,20 @@ def main() -> None:
         cfg.device, cfg.compute_type = "cpu", "int8"
     if args.threads is not None:
         cfg.cpu_threads = args.threads
-    if args.accuracy:                  # 정확도/범위 우선 프로파일
+    if args.accuracy:                  # 정확도 우선 프로파일
         cfg = STTConfig.for_accuracy(cfg)
     if args.beam is not None:
         cfg.beam_size = args.beam
+    if args.vad is not None:
+        cfg.vad_rms_threshold = args.vad
+    if args.normalize:
+        cfg.normalize_audio = True
 
     if args.wav:
         run_wav(args.wav, cfg)
     else:
-        run_mic(cfg, respeaker=args.respeaker, device=args.device, meter=not args.no_meter)
+        run_mic(cfg, respeaker=args.respeaker, device=args.device,
+                meter=not args.no_meter, thread=not args.no_thread)
 
 
 if __name__ == "__main__":
