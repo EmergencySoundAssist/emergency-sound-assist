@@ -18,6 +18,10 @@ pyroomacoustics>=0.7     # SRP-PHAT / MUSIC 공간 스펙트럼 (다중 음원)
 pyusb>=1.2               # ReSpeaker USB 제어 (자체 DoA 레지스터 + LED)
                          #   ※ libusb 백엔드 필요: brew install libusb / apt install libusb-1.0-0
 
+# ── ④ 알림 전송 (notify/BLE, --ble 옵션) ──────────────
+bleak>=0.21              # 크로스플랫폼 BLE로 워치에 FusedResult 전송. Jetson/Ubuntu는 BlueZ(dbus)
+                         #   ※ --ble 안 쓰면 미설치여도 동작 (지연 import)
+
 # ── 개발 ─────────────────────────────────────────────
 pytest>=7.0
 
