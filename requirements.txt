@@ -24,3 +24,7 @@ pytest>=7.0
 # ── Jetson(보드) 주의 ────────────────────────────────
 #  - TensorRT는 JetPack에 기본 포함 → pip 설치 X (trtexec로 .engine 변환)
 #  - onnxruntime-gpu / torch 는 NVIDIA 전용 aarch64 빌드 사용 (일반 pip 아님)
+
+# ── 알림 전송 (notify/BLE, --ble 옵션) ──────────────
+bleak>=0.21              # 크로스플랫폼 BLE로 워치/폰에 FusedResult 전송. Jetson/Ubuntu는 BlueZ(dbus)
+                         #   ※ --ble 안 쓰면 미설치여도 동작 (지연 import)
