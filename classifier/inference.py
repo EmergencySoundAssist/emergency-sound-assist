@@ -53,9 +53,11 @@ _TO_SUBTYPE = {
 _SUBTYPE_PATH = Path(__file__).resolve().parent / "models" / "subtype_cnn_attn_s42.onnx"
 SUBTYPE_CONF = 0.6        # 미만이면 '긴급차량'(UNKNOWN)으로 일반화 (경찰↔구급 혼동 회피)
 
-# ── 접근 속도(사이렌 빠르기) — ViT speed_neural 모델 (선택) ──────────
-# 검출과 입력(64×216 멜, hop 512)·정규화가 동일 → 같은 윈도우를 그대로 재사용한다.
-# 출력은 km/h(0~80 학습) → 1~5단계로 변환. ⚠ 실주행 미검증(정지 환각) — 데모용.
+# ── 접근 속도(사이렌 빠르기) — ViT speed_neural 모델 (기본 OFF) ──────
+# ⚠ ViT 경고: 실주행 미검증·정지 환각 → "검증 전 배포 금지". 실도로 검증 통과 전엔 끈다.
+# 접근 빠르기 1~5단계는 approach 모듈(음량 기울기)이 담당 — 견고·스피커 크기 불변.
+# 검증 후 켜려면 SPEED_ENABLED=True (검출과 멜 동일 hop512/216 → 같은 윈도우 재사용).
+SPEED_ENABLED = False
 _SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural.onnx"
 
 
@@ -211,9 +213,10 @@ class _OnnxClassifier:
 
         subtype, sub_conf = None, None
         speed_level, speed_kmh = None, None
-        if label is SoundClass.SIREN:            # 차종·속도는 사이렌일 때만 (멜 그대로 재사용)
+        if label is SoundClass.SIREN:            # 차종은 사이렌일 때만 (멜 그대로 재사용)
             subtype, sub_conf = self._infer_subtype(x)
-            speed_level, speed_kmh = self._infer_speed(x)
+            if SPEED_ENABLED:                    # 신경망 속도 — 실도로 검증 전 기본 OFF
+                speed_level, speed_kmh = self._infer_speed(x)
         return ClassResult.from_label(label, float(prob[i]), subtype, sub_conf,
                                       speed_level, speed_kmh)
 

@@ -32,6 +32,20 @@ from core.types import AudioChunk, ApproachResult, Motion, SAMPLE_RATE
 # 사이렌 에너지 대역(Hz): 기본 톤 + 낮은 배음.
 _BAND = (300.0, 2500.0)
 
+# 접근 빠르기 단계 경계 (log-파워/초 → 1~5).  ← 튜닝 대상
+# 음량 기울기의 '크기' = 다가오는 빠르기 (소스 음압 상쇄 → 스피커 크기 불변).
+# 합성 실측: 60km/h·측면 8m 원거리 접근 구간 기울기 ~0.8 → 3단계.
+SPEED_LEVEL_EDGES = (0.30, 0.60, 0.90, 1.30)
+
+
+def _speed_level(eslope: float) -> int:
+    """음량 기울기(log-파워/초) → 접근 빠르기 1~5단계."""
+    lvl = 1
+    for edge in SPEED_LEVEL_EDGES:
+        if eslope >= edge:
+            lvl += 1
+    return min(lvl, 5)
+
 
 def _to_mono(samples: np.ndarray) -> np.ndarray:
     """(n,) 또는 (n, ch) → (n,) float64 모노."""
@@ -130,14 +144,15 @@ class ApproachDetector:
     def update(self, chunk: AudioChunk) -> ApproachResult:
         x = _to_mono(chunk.samples)
         self._buf = np.concatenate([self._buf, x])[-self.maxlen:]
-        motion = self._decide()
+        motion, level = self._decide()
         self._last = motion
-        return ApproachResult(motion=motion)
+        return ApproachResult(motion=motion, speed_level=level)
 
     # ------------------------------------------------------------------
-    def _decide(self) -> Motion:
+    def _decide(self):
+        """→ (Motion, 접근 빠르기 1~5 | None).  빠르기는 접근일 때만 (음량 기울기 크기)."""
         if self._buf.size < self.frame:
-            return Motion.UNKNOWN
+            return Motion.UNKNOWN, None
 
         ts, fs, es = [], [], []
         for start in range(0, self._buf.size - self.frame + 1, self.hop):
@@ -152,9 +167,9 @@ class ApproachDetector:
 
         tone = ~np.isnan(fs)                      # 사이렌 톤이 잡힌 프레임
         if tone.sum() < self.min_valid_frames:
-            return Motion.UNKNOWN                  # 톤 관측 부족 (비사이렌/무음)
+            return Motion.UNKNOWN, None            # 톤 관측 부족 (비사이렌/무음)
         if np.ptp(ts[tone]) < self.min_span_seconds:
-            return Motion.UNKNOWN                  # 관측 시간 부족 (아직 추세 불명)
+            return Motion.UNKNOWN, None            # 관측 시간 부족 (아직 추세 불명)
 
         # 주 신호: log-에너지 추세(부호가 통과점에서 뒤집힘)
         e_ok = np.isfinite(es)
@@ -162,8 +177,10 @@ class ApproachDetector:
         # 보강: 도플러 주파수 추세 (강한 하강 = 통과 진행)
         fslope = _slope(ts[tone], fs[tone])
 
+        level = None
         if eslope > self.energy_deadband:
             motion = Motion.APPROACHING
+            level = _speed_level(eslope)           # 기울기 크기 = 접근 빠르기 (1~5)
         elif eslope < -self.energy_deadband:
             motion = Motion.RECEDING
         else:
@@ -174,7 +191,7 @@ class ApproachDetector:
         if motion is Motion.STEADY and fslope < -self.glide_threshold:
             motion = Motion.STEADY  # 전이 구간 — 명시적으로 유지 (부호 단정 회피)
 
-        return motion
+        return motion, level
 
 
 if __name__ == "__main__":  # 빠른 스모크 (무음 → UNKNOWN)

@@ -120,6 +120,7 @@ class Motion(str, Enum):
 @dataclass
 class ApproachResult:
     motion: Motion
+    speed_level: Optional[int] = None    # 접근 빠르기 1~5 — 음량 기울기 크기 (접근 중일 때만)
 
 
 # ---------------------------------------------------------------------------
@@ -186,10 +187,13 @@ class FusedResult:
             Motion.STEADY: "유지",
             Motion.UNKNOWN: "이동 미상",
         }[self.approach.motion]
-        # 접근 중이고 속도 단계가 있으면 빠르기 형용사를 붙인다 ('빠르게 접근 중').
-        if self.sound.speed_level is not None and self.approach.motion is Motion.APPROACHING:
+        # 접근 중이면 빠르기 형용사를 붙인다 ('빠르게 접근 중').
+        # 1차 소스 = 접근 모듈의 음량 기울기 단계 (견고, 스피커 크기 불변).
+        # (신경망 속도 모델(sound.speed_level)은 미검증이라 기본 OFF — 켜면 폴백으로만 사용)
+        level = self.approach.speed_level or self.sound.speed_level
+        if level is not None and self.approach.motion is Motion.APPROACHING:
             spd = {1: "아주 느리게 ", 2: "천천히 ", 3: "", 4: "빠르게 ", 5: "매우 빠르게 "}
-            ko_motion = f"{spd[self.sound.speed_level]}접근 중"
+            ko_motion = f"{spd[level]}접근 중"
         line = f"{ko_sound}, {ko_dir}, {ko_motion}"
         if self.speech is not None and self.speech.is_speech and self.speech.text:
             line += f"  · 자막: {self.speech.to_korean()}"   # 평상시 음성 자막

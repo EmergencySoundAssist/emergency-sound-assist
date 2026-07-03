@@ -31,13 +31,14 @@ confidence: float                 # 0.0 ~ 1.0
 is_emergency: bool                # siren/horn 이면 True
 subtype: SirenSubtype | None      # siren 일 때만 차종 (아래)
 subtype_confidence: float | None  # 차종 확률 0~1 (없으면 None)
-speed_level: int | None           # siren 접근 속도 1~5 (느림~빠름)
-speed_kmh: float | None           # 원시 추정 속도(km/h, 참고)
+speed_level: int | None           # (선택) 신경망 속도 모델 — 기본 OFF (미검증)
+speed_kmh: float | None           # (선택) 〃 원시 km/h
 ```
 - `SirenSubtype`: `ambulance`(구급차) | `police`(경찰차) | `fire`(소방차) | `unknown`(긴급차량, 확신<0.6)
-- 차종·속도는 **siren 일 때만** 채워진다 — `horn`/`noise` 는 `None`.
-- **속도(1~5)**: ViT `speed_neural` 모델로 멜→km/h→단계. `to_korean()` 이 "빠르게 접근 중"처럼 표시.
-  ⚠ 실주행 미검증(정지 환각) — 데모용. 매 틱 raw 값이라 다소 흔들림(스무딩 미적용).
+- 차종은 **siren 일 때만** 채워진다 — `horn`/`noise` 는 `None`.
+- **접근 빠르기(1~5)는 ③ `ApproachResult.speed_level` 이 담당** (음량 기울기 기반 — 아래).
+  신경망 속도 모델(ViT speed_neural)은 실주행 미검증(정지 환각)이라 **기본 OFF**
+  (`classifier/inference.py` 의 `SPEED_ENABLED`) — 실도로 검증 통과 후에만 켠다.
 - 설계 상세 → [classifier/subtype.md](classifier/subtype.md)
 
 ## ② 방향 출력: `DirectionResult`
@@ -49,7 +50,10 @@ angle_deg: float | None  # 원시 각도(있으면)
 ## ③ 접근 출력: `ApproachResult`
 ```
 motion: Motion           # approaching | receding | steady | unknown
+speed_level: int | None  # 접근 빠르기 1~5 — 음량 기울기 크기 (접근 중일 때만)
 ```
+- 음량 기울기는 소스 음압이 상쇄돼 **스피커 크기와 무관** — "얼마나 빠르게 다가오나"를 직접 잰다.
+- `to_korean()` 이 "빠르게 접근 중"처럼 형용사로 표시 (1 아주 느리게 ~ 5 매우 빠르게).
 
 ## ④ STT 출력: `SpeechResult`  *(MVP 외 확장)*
 ```
