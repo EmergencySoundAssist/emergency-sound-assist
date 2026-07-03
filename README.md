@@ -3,14 +3,15 @@
 청각장애 운전자를 위한 **긴급 경고음 감지 보조 디바이스**.
 차량 주변의 사이렌·경적 같은 소리를 AI로 감지해, **종류·방향·접근 여부**를 시각 정보로 바꿔준다.
 
-> 최종 출력 예: **"구급차, 후방, 빠르게 접근 중"**  (사이렌이면 차종·속도까지)
+> 최종 출력 예: **"사이렌, 후방, 빠르게 접근 중"**  (접근 빠르기 1~5단계 포함)
+> 차종(구급/경찰/소방)은 선택 기능 — 기본 구성에서 제외 (subtype onnx 를 넣으면 자동 활성).
 
 ---
 
 ## MVP 3대 기능
 | # | 기능 | 내용 | 담당 |
 |---|------|------|------|
-| ① | 소리 분류 | siren / horn / normal + 차종 + 접근속도(1~5) | 이석우, 김달현 |
+| ① | 소리 분류 | siren / horn / normal + 접근빠르기(1~5) · 차종은 선택 | 이석우, 김달현 |
 | ② | 방향 추정 | 전 / 후 / 좌 / 우 | 천자민 |
 | ③ | 접근/멀어짐 | 도플러 + 음량 추세 | 김도윤 |
 
@@ -22,11 +23,11 @@
 ```
 core/         공통 데이터 약속 (types.py)
 audio/        오디오 입력 (마이크/파일)
-classifier/   ① 소리 분류  ← 구현됨 (CNN+Attn ONNX 검출 + 사이렌 차종)
+classifier/   ① 소리 분류  ← 구현됨 (CNN+Attn ONNX 검출 · 차종은 선택, 기본 제외)
 doa/          ② 방향 추정  ← 구현됨 (자체 DoA·다중음원 SRP/MUSIC·LED·스무딩·진단)
 approach/     ③ 접근/멀어짐 ← 구현됨 (실시간 도플러 + 음량 추세)
 stt/          ④ STT 음성→텍스트 ← 구현됨 (faster-whisper · 확장, 독립 실행)
-pipeline/     세 결과 통합  ← 구현됨 (FusedResult → "구급차, 후방, 접근 중")
+pipeline/     세 결과 통합  ← 구현됨 (FusedResult → "사이렌, 후방, 접근 중")
 docs/         설계 문서  → docs/README.md
 ```
 
@@ -35,11 +36,11 @@ docs/         설계 문서  → docs/README.md
 python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
 pip install -r requirements.txt       # 의존성 설치
 
-# ① 분류 + 차종
-python classify.py --demo             # 합성 사이렌으로 분류+차종 확인
+# ① 분류
+python classify.py --demo             # 합성 사이렌으로 분류 확인
 python classify.py --mic              # 실시간 마이크
 
-# 통합 파이프라인 (분류+차종+접근+방향)
+# 통합 파이프라인 (분류+접근+방향)
 python main.py --demo                          # 합성 (방향은 미상 — 1채널)
 python main.py --mic --channels 6              # ReSpeaker 자동 탐지 (미탐지 시 --device N 지정)
 python main.py --mic --channels 6 --stt --stt-model small   # + 평상시 자막 (CPU는 small, 노트북 데모는 tiny)

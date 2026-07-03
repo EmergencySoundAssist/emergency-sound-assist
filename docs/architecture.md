@@ -9,7 +9,7 @@
 [ReSpeaker 마이크 6채널]
         │
         ├── ch0 (처리됨)  ──→  ① 분류 (classifier)   → ClassResult   (siren/horn/normal)
-        │                          └─ siren 이면 차종 추론 → 구급/경찰/소방 (subtype)
+        │                          └─ (선택) siren 이면 차종 추론 — 기본 제외
         │
         └── ch1~4 (원본)  ──→  ② 방향 (doa)          → DirectionResult (전/후/좌/우)
                           └─→  ③ 접근 (approach)      → ApproachResult  (접근/멀어짐)
@@ -17,10 +17,10 @@
         ▼
    [pipeline] 세 결과 통합 → FusedResult
         ▼
-   출력 예: "구급차, 후방, 접근 중"   (→ 이후 HUD/디스플레이)
+   출력 예: "사이렌, 후방, 접근 중"   (→ 이후 HUD/디스플레이)
 ```
 
-> ① 분류는 `siren` 일 때 한 단계 더 들어가 차종(구급/경찰/소방)을 붙인다. 접근 빠르기(1~5단계)는 ③ 접근 모듈(음량 기울기)이 담당. → [classifier/subtype.md](classifier/subtype.md)
+> 차종(구급/경찰/소방)은 **선택 기능** — 기본 구성에선 모델 파일을 빼서 비활성 (넣으면 자동 활성, [classifier/subtype.md](classifier/subtype.md)). 접근 빠르기(1~5단계)는 ③ 접근 모듈(음량 기울기)이 담당.
 > 방향은 ReSpeaker 6채널 한 스트림을 ch0(분류·접근)·ch1~4(SRP-PHAT 방향)로 갈라 `pipeline` 이 통합한다 (`python main.py --mic --channels 6`). ReSpeaker 없으면 방향만 미상.
 > ④ STT 는 **분류가 게이트**한다 — 사이렌·경적(긴급)이면 STT 를 멈추고, 평상시(noise)면 자막을 만든다 (`--stt`, WBS 10주차 우선순위 전환).
 
@@ -48,7 +48,7 @@
 
 ## MVP 범위
 - 분류: siren / horn / normal_traffic (3클래스) — CNN+Attn ONNX, 구현됨
-  - +차종: siren 일 때 구급/경찰/소방 (선택 — 모델 없으면 자동 생략)
+  - 차종(구급/경찰/소방): 선택 — 기본 제외 (subtype onnx 추가 시 자동 활성)
   - +접근 빠르기: 1~5단계 — **음량 기울기 기반** (신경망 속도 모델은 미검증 → 기본 OFF)
 - 방향: 4방향 — 자체 DoA(1단계) + 다중음원 SRP-PHAT/MUSIC(2단계), 구현됨
 - 접근: 도플러 + 음량 추세, 구현됨

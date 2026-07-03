@@ -29,13 +29,14 @@ sample_rate: int = 16000
 label: SoundClass                 # siren | horn | normal_traffic
 confidence: float                 # 0.0 ~ 1.0
 is_emergency: bool                # siren/horn 이면 True
-subtype: SirenSubtype | None      # siren 일 때만 차종 (아래)
+subtype: SirenSubtype | None      # (선택) 차종 — 기본 비활성 (모델 파일 미포함)
 subtype_confidence: float | None  # 차종 확률 0~1 (없으면 None)
 speed_level: int | None           # (선택) 신경망 속도 모델 — 기본 OFF (미검증)
 speed_kmh: float | None           # (선택) 〃 원시 km/h
 ```
 - `SirenSubtype`: `ambulance`(구급차) | `police`(경찰차) | `fire`(소방차) | `unknown`(긴급차량, 확신<0.6)
-- 차종은 **siren 일 때만** 채워진다 — `horn`/`noise` 는 `None`.
+- 차종은 **선택 기능** — 기본 구성엔 subtype onnx 가 없어 항상 `None`(표시는 "사이렌").
+  파일을 `classifier/models/` 에 넣으면 자동 활성 (siren 일 때만 채워짐).
 - **접근 빠르기(1~5)는 ③ `ApproachResult.speed_level` 이 담당** (음량 기울기 기반 — 아래).
   신경망 속도 모델(ViT speed_neural)은 실주행 미검증(정지 환각)이라 **기본 OFF**
   (`classifier/inference.py` 의 `SPEED_ENABLED`) — 실도로 검증 통과 후에만 켠다.
