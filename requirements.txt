@@ -18,6 +18,9 @@ pyroomacoustics>=0.7     # SRP-PHAT / MUSIC 공간 스펙트럼 (다중 음원)
 pyusb>=1.2               # ReSpeaker USB 제어 (자체 DoA 레지스터 + LED)
                          #   ※ libusb 백엔드 필요: brew install libusb / apt install libusb-1.0-0
 
+# ── ③ HUD 출력 (hud) ──────────────────────────────────
+pygame>=2.1              # ④+ HUD 화면 출력(SDL2). aarch64/Jetson 휠 제공. 한글 폰트: apt install fonts-nanum
+
 # ── 개발 ─────────────────────────────────────────────
 pytest>=7.0
 
