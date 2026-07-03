@@ -16,6 +16,7 @@ EmergencySoundAssist 실시간 메인 루프.
 from __future__ import annotations
 
 import argparse
+import logging
 import warnings
 
 import numpy as np
@@ -48,15 +49,19 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
-def run_stream(chunks, stt_worker=None) -> None:
+def run_stream(chunks, stt_worker=None, sender=None) -> None:
     pipe = Pipeline(stt_worker=stt_worker)
     try:
         for i, chunk in enumerate(chunks):
             fused = pipe.process(chunk)
             print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
+            if sender is not None:                 # --ble: 결과를 워치/폰으로 전송
+                sender.send(fused)
     finally:
         if stt_worker is not None:
             stt_worker.stop()
+        if sender is not None:
+            sender.close()
 
 
 def main() -> None:
@@ -75,6 +80,9 @@ def main() -> None:
     ap.add_argument("--stt-model", default=None,
                     help="STT 모델 크기/경로 (tiny/base/small/medium/…). 미지정 시 STTConfig 기본(medium). "
                          "GPU 없는 보드·노트북은 small 이하 권장 — medium 은 CPU 실시간 불가")
+    ap.add_argument("--ble", action="store_true", help="결과를 BLE로 워치/폰에 전송")
+    ap.add_argument("--watch-mac", type=str, default=None,
+                    help="BLE 대상 MAC 직접 지정(미지정 시 서비스 UUID로 자동 검색)")
     args = ap.parse_args()
 
     stt_worker = None
@@ -89,17 +97,26 @@ def main() -> None:
         stt_worker.start()
         print(f"[stt] 평상시 자막 ON (모델 {cfg.model_size}, 백그라운드 스레드) — 사이렌·경적일 땐 자동 멈춤")
 
+    # --ble 일 때만 BLE 송신기 시작 (없으면 sender=None → 전송 생략, 지연 import)
+    sender = None
+    if args.ble:
+        from notify import BleSender
+        logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+        sender = BleSender(address=args.watch_mac)
+        sender.start()
+        print("== BLE: 전송 활성화 ==")
+
     if args.demo:
         print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
         sig = _synth_passby()
-        run_stream(iter_chunks_from_array(sig), stt_worker)
+        run_stream(iter_chunks_from_array(sig), stt_worker, sender)
     elif args.wav:
         print(f"== WAV: {args.wav} ==")
         sig = load_wav(args.wav)
-        run_stream(iter_chunks_from_array(sig), stt_worker)
+        run_stream(iter_chunks_from_array(sig), stt_worker, sender)
     else:
         print("== MIC: 실시간 (Ctrl+C 종료) ==")
-        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels), stt_worker)
+        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels), stt_worker, sender)
 
 
 if __name__ == "__main__":
