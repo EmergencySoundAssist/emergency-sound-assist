@@ -54,15 +54,23 @@ def iter_chunks_from_mic(
 
     channels==1 이면 (n,) 모노, 그 이상이면 (n, channels) 다채널을 그대로 담는다.
     (분류·접근은 pipeline 이 ch0 만, 방향은 ch1~4 만 골라 쓴다.)
+    device=None 이고 channels>1 이면 ReSpeaker 를 이름으로 자동 탐지한다
+    (실패 시 기본 장치 + 경고 라벨).
     """
     import sounddevice as sd  # 지연 import
 
+    device, label = _resolve_input_device(device, channels)
+    print(f"[audio] 입력 장치: {label} · {channels}ch {sample_rate}Hz", file=sys.stderr)
+    watch = SilenceWatch()
     n = int(sample_rate * chunk_seconds)
     with sd.InputStream(samplerate=sample_rate, channels=channels,
                         dtype="float32", device=device) as stream:
         while True:
             data, _ = stream.read(n)
             samples = data[:, 0].copy() if channels == 1 else data.copy()
+            warn = watch.update(samples)
+            if warn:
+                print(warn, file=sys.stderr)
             yield AudioChunk(samples=samples, sample_rate=sample_rate)
 
 
@@ -82,15 +90,20 @@ def iter_chunks_from_respeaker(
     """
     import sounddevice as sd  # 지연 import
 
-    if device is None:
-        device = _find_respeaker_index()
-
+    device, label = _resolve_input_device(device, num_channels)
+    print(f"[audio] 입력 장치: {label} · {num_channels}ch→ch{channel} {sample_rate}Hz",
+          file=sys.stderr)
+    watch = SilenceWatch()
     n = int(sample_rate * chunk_seconds)
     with sd.InputStream(samplerate=sample_rate, channels=num_channels,
                         dtype="float32", device=device) as stream:
         while True:
             data, _ = stream.read(n)          # (n, num_channels)
-            yield AudioChunk(samples=data[:, channel].copy(), sample_rate=sample_rate)
+            mono = data[:, channel].copy()
+            warn = watch.update(mono)
+            if warn:
+                print(warn, file=sys.stderr)
+            yield AudioChunk(samples=mono, sample_rate=sample_rate)
 
 
 def iter_chunks_threaded(source: Iterator, maxsize: int = 120) -> Iterator:
