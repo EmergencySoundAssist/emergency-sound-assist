@@ -25,7 +25,7 @@
    `faster-whisper` 는 PyPI `onnxruntime`(CPU) 을 **강제 의존**(`onnxruntime<2,>=1.14`)한다.
    approach 는 Jetson 에서 **`onnxruntime-gpu`**(NVIDIA aarch64 전용 빌드)를 쓰는데, 둘 다 같은
    `onnxruntime` 파이썬 네임스페이스에 설치돼 **서로를 덮어쓴다** → approach 의 GPU/TensorRT 추론이 깨진다.
-   ✅ **해결**: 우리 STT 는 **자체 energy VAD** 를 쓰므로 faster-whisper 의 onnxruntime(Silero VAD)이 **필요 없다**.
+   ✅ **해결**: 우리 STT 는 **자체 VAD**(webrtcvad, 없으면 energy 폴백)를 쓰므로 faster-whisper 의 onnxruntime(Silero VAD)이 **필요 없다**.
       → `pip install --no-deps faster-whisper` 로 onnxruntime 을 끌어오지 않게 한다.
 
 2. **ctranslate2 CPU 휠이 CUDA 빌드를 덮어쓰기.**
@@ -66,7 +66,7 @@ pip install "numpy==1.26.4"
 
 # STT 비-충돌 의존성만 (onnxruntime/ctranslate2 는 제외 — 아래 GPU 단계에서):
 pip install --no-deps faster-whisper
-pip install huggingface_hub tokenizers av tqdm soundfile sounddevice
+pip install huggingface_hub tokenizers av tqdm soundfile sounddevice webrtcvad-wheels
 # approach 의 onnxruntime-gpu 는 그쪽 런북대로 NVIDIA 휠로 설치(STT 가 건드리지 않음)
 ```
 
@@ -131,10 +131,23 @@ python -m stt.run --mic --respeaker --device 2 # 자동 탐지 실패 시 인덱
 - 보드 권장 프로파일: `STTConfig.for_jetson()` = **small + cuda + float16** (Orin Tensor 코어 100% 활용, 최상급 정확도). 8GB 가 빡빡하면 `int8_float16` 으로.
   한국어는 Whisper 난이도가 높아 `base` 보다 `small` 이 인식 정확도에 안정적.
 
+## 5.5 통합 실행 (main.py — 긴급↔STT 게이트 실증)
+
+```bash
+python -u main.py --mic --channels 6 --stt --stt-model small
+```
+체크 포인트 (위에서부터 순서대로 확인):
+1. `[audio] 입력 장치: ReSpeaker …` — **다른 장치명이 찍히면** `python -c "import sounddevice as sd; print(sd.query_devices())"` 로 6채널 장치 인덱스 확인 후 `--device N`.
+2. `[stt] VAD: webrtcvad` — `energy 폴백` 이 찍히면 `pip install webrtcvad-wheels`.
+3. CUDA 미감지(CPU) 상태에선 **반드시 `--stt-model small`** — medium(기본값)/turbo 는 STT 워커가 못 따라와 자막이 안 뜬다. GPU ctranslate2(3번) 설치 후에는 기본값으로 가능.
+4. `| tee` 등 파이프로 로그를 뜰 때는 `python -u`(stdout 언버퍼) 필수 — 안 그러면 진행 줄이 한참 안 보인다.
+5. `[audio] 경고: … 연속 무음` 이 뜨면 ch0 에 소리가 안 들어오는 상태(장치 오선택) — 1번으로.
+
 ## 6. 트러블슈팅
 
 | 증상 | 원인 / 해결 |
 |------|------------|
+| 분류 conf 가 고정(예: 0.83)·자막 0건 | 입력 장치 오선택 → ch0 무음. 시작 로그 `[audio] 입력 장치` 확인, `--device N` 지정. |
 | `not compiled with CUDA support` | CPU 휠이 깔림. CUDA ctranslate2(3번) 재설치, `get_cuda_device_count()>=1` 확인. |
 | approach 의 GPU 추론이 깨짐 | faster-whisper 가 `onnxruntime`(CPU) 으로 onnxruntime-gpu 를 덮음. STT 는 `--no-deps` 로 설치(1번 충돌). |
 | `libctranslate2.so.4: cannot open` | 파이썬 래퍼만 깔리고 C++ 런타임 없음. 옵션 A(컨테이너)/C(소스빌드)로. |
