@@ -65,15 +65,16 @@ def main() -> None:
     g.add_argument("--demo", action="store_true", help="합성 통과 시연")
     g.add_argument("--wav", type=str, help="WAV 파일 경로")
     g.add_argument("--mic", action="store_true", help="실시간 마이크")
-    ap.add_argument("--device", type=int, default=None, help="마이크 장치 인덱스")
+    ap.add_argument("--device", type=int, default=None,
+                    help="마이크 장치 인덱스 (미지정 시: 다채널이면 ReSpeaker 자동 탐지 → 기본 장치)")
     ap.add_argument("--channels", type=int, default=1,
                     help="마이크 채널 수 (ReSpeaker=6 → ch0 분류·접근, ch1~4 방향)")
     ap.add_argument("--stt", action="store_true",
                     help="평상시 음성→자막(STT). 사이렌·경적일 땐 자동 멈춤. "
                          "faster-whisper 필요(pip install -r stt/requirements.txt)")
     ap.add_argument("--stt-model", default=None,
-                    help="STT 모델 크기 (tiny/base/small/medium). 기본 small. "
-                         "노트북 데모는 tiny·base 가 빠름")
+                    help="STT 모델 크기/경로 (tiny/base/small/medium/…). 미지정 시 STTConfig 기본(medium). "
+                         "GPU 없는 보드·노트북은 small 이하 권장 — medium 은 CPU 실시간 불가")
     args = ap.parse_args()
 
     stt_worker = None
