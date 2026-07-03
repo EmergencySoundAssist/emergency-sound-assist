@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Iterator
 
 import numpy as np
@@ -132,6 +133,37 @@ def _find_respeaker_index() -> int | None:
         if dev.get("max_input_channels", 0) >= 1 and ("respeaker" in name or "seeed" in name):
             return idx
     return None
+
+
+class SilenceWatch:
+    """연속 '디지털 무음' 감시 — 장치 오선택(ch0 무음) 함정을 즉시 드러낸다.
+
+    update(samples)는 연속 chunks개 무음이 된 순간 한 번만 경고 문자열을 돌려주고,
+    소리가 다시 들어오면 리셋돼 다음 무음 구간에서 또 한 번 경고한다.
+    다채널 (n, C) 입력이면 ch0(처리채널) 기준. threshold 는 정상 환경소음 RMS
+    보다 훨씬 낮게 잡아 '진짜 0에 가까운' 입력만 무음으로 본다.
+    """
+
+    def __init__(self, threshold: float = 1e-5, chunks: int = 5):
+        self._threshold = threshold
+        self._chunks = chunks
+        self._run = 0
+        self._warned = False
+
+    def update(self, samples: np.ndarray) -> str | None:
+        x = np.asarray(samples)
+        mono = x[:, 0] if x.ndim == 2 else x
+        rms = float(np.sqrt(np.mean(np.square(mono, dtype=np.float64)))) if mono.size else 0.0
+        if rms >= self._threshold:
+            self._run, self._warned = 0, False
+            return None
+        self._run += 1
+        if self._run >= self._chunks and not self._warned:
+            self._warned = True
+            return (f"[audio] 경고: 입력이 {self._run}청크 연속 무음 — 장치 오선택일 수 있음. "
+                    "장치 목록 확인: python -c \"import sounddevice as sd; print(sd.query_devices())\" "
+                    "→ --device N 지정")
+        return None
 
 
 def _resample(data: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
