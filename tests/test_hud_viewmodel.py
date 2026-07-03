@@ -26,6 +26,7 @@ def test_siren_with_subtype_shows_vehicle():
     assert v.direction_text == "후방"
     assert v.motion_text == "접근 중"
     assert v.subtitle == ""
+    assert v.confidence == 0.9
 
 
 def test_siren_without_subtype():
@@ -54,4 +55,10 @@ def test_normal_with_speech_sets_subtitle():
 
 def test_normal_without_speech_blank_subtitle():
     v = HudView.from_fused(_fused(SoundClass.NORMAL_TRAFFIC))
+    assert v.subtitle == ""
+
+
+def test_speech_empty_text_blank_subtitle():
+    v = HudView.from_fused(_fused(SoundClass.NORMAL_TRAFFIC,
+                                     speech=SpeechResult(text="", is_speech=True)))
     assert v.subtitle == ""
