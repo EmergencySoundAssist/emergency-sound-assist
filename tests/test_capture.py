@@ -2,7 +2,45 @@
 
 import numpy as np
 
-from audio.capture import SilenceWatch
+from audio.capture import SilenceWatch, _find_respeaker_index, _resolve_input_device
+
+DEVS = [
+    {"name": "HDA NVidia: HDMI", "max_input_channels": 0},
+    {"name": "USB Camera: Audio", "max_input_channels": 1},
+    {"name": "ReSpeaker 4 Mic Array (UAC1.0)", "max_input_channels": 6},
+]
+
+
+def test_find_respeaker_by_name():
+    assert _find_respeaker_index(DEVS) == 2
+
+
+def test_find_respeaker_none_when_absent():
+    assert _find_respeaker_index(DEVS[:2]) is None
+
+
+def test_resolve_multichannel_prefers_respeaker():
+    device, label = _resolve_input_device(None, 6, DEVS)
+    assert device == 2
+    assert "ReSpeaker" in label
+
+
+def test_resolve_explicit_device_wins():
+    device, label = _resolve_input_device(1, 6, DEVS)
+    assert device == 1
+    assert "USB Camera" in label
+
+
+def test_resolve_mono_keeps_system_default():
+    device, label = _resolve_input_device(None, 1, DEVS)
+    assert device is None
+    assert "기본 장치" in label
+
+
+def test_resolve_multichannel_without_respeaker_falls_back_with_hint():
+    device, label = _resolve_input_device(None, 6, DEVS[:2])
+    assert device is None
+    assert "--device" in label       # 폴백 사실 + 해결 힌트가 라벨에 드러나야 함
 
 SILENT = np.zeros(16000, dtype=np.float32)
 LOUD = np.full(16000, 0.1, dtype=np.float32)

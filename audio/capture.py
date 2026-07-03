@@ -124,15 +124,48 @@ def iter_chunks_threaded(source: Iterator, maxsize: int = 120) -> Iterator:
         yield item
 
 
-def _find_respeaker_index() -> int | None:
-    """입력 장치 중 이름에 'respeaker'/'seeed' 가 든 첫 장치 인덱스. 없으면 None(기본 장치)."""
-    import sounddevice as sd  # 지연 import
+def _find_respeaker_index(devices=None) -> int | None:
+    """입력 장치 중 이름에 'respeaker'/'seeed' 가 든 첫 장치 인덱스. 없으면 None(기본 장치).
 
-    for idx, dev in enumerate(sd.query_devices()):
+    devices: 테스트용 주입(sd.query_devices() 형태의 dict 시퀀스). None 이면 실제 조회.
+    """
+    if devices is None:
+        import sounddevice as sd  # 지연 import
+        devices = sd.query_devices()
+
+    for idx, dev in enumerate(devices):
         name = str(dev.get("name", "")).lower()
         if dev.get("max_input_channels", 0) >= 1 and ("respeaker" in name or "seeed" in name):
             return idx
     return None
+
+
+def _resolve_input_device(
+    device: int | None, channels: int, devices=None
+) -> tuple[int | None, str]:
+    """입력 장치 결정 + 시작 로그용 라벨.
+
+    - device 명시 시 그대로 쓴다.
+    - 미지정 + 다채널(channels>1)이면 ReSpeaker 를 이름으로 자동 탐지한다.
+      (다채널 요구 = ReSpeaker 의도. 시스템 기본 장치가 다른 마이크면 ch0 무음 함정
+       — 분류 conf 고정·자막 0건. → docs/stt/jetson.md 트러블슈팅)
+    - 그래도 없으면 None(시스템 기본 장치) 폴백 + 라벨에 해결 힌트를 남긴다.
+    """
+    if devices is None:
+        import sounddevice as sd  # 지연 import
+        devices = sd.query_devices()
+
+    if device is None and channels > 1:
+        device = _find_respeaker_index(devices)
+
+    if device is not None:
+        name = devices[device].get("name", "?") if 0 <= device < len(devices) else "?"
+        return device, f"{name} (index {device})"
+
+    label = "시스템 기본 장치"
+    if channels > 1:
+        label += " — ReSpeaker 미탐지, 무음이면 --device N 지정"
+    return None, label
 
 
 class SilenceWatch:
