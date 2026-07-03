@@ -16,3 +16,8 @@ faster-whisper
 numpy
 soundfile             # WAV 파일 로드 (stt.run --wav)
 sounddevice           # 마이크 실시간 입력 (stt.run --mic, 선택)
+
+# ===== VAD (선택, 강력 권장) =====
+# webrtcvad: 말소리/비음성 구분 → 노이즈 환각 억제. torch 0(Jetson ONNX-only 와 호환).
+# 없으면 자동으로 energy(RMS) 폴백. (더 강한 노이즈 robust 는 추후 silero-onnx 로 교체 가능)
+webrtcvad-wheels

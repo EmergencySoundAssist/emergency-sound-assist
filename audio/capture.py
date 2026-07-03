@@ -92,6 +92,37 @@ def iter_chunks_from_respeaker(
             yield AudioChunk(samples=data[:, channel].copy(), sample_rate=sample_rate)
 
 
+def iter_chunks_threaded(source: Iterator, maxsize: int = 120) -> Iterator:
+    """source(청크 제너레이터)를 백그라운드 스레드에서 읽어 큐로 흘려보낸다.
+
+    소비자가 변환(블로킹)하는 동안에도 캡처 스레드는 계속 마이크를 읽으므로
+    '변환 중 입력 못 받음'을 막는다. 큐가 maxsize(기본 ~2분) 차면 producer 가 대기.
+    """
+    import threading
+    import queue
+
+    q: "queue.Queue" = queue.Queue(maxsize=maxsize)
+    sentinel = object()
+
+    def _producer():
+        try:
+            for item in source:
+                q.put(item)
+        except Exception as e:          # 캡처 에러를 소비자 쪽으로 전달
+            q.put(e)
+        finally:
+            q.put(sentinel)
+
+    threading.Thread(target=_producer, daemon=True).start()
+    while True:
+        item = q.get()
+        if item is sentinel:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
 def _find_respeaker_index() -> int | None:
     """입력 장치 중 이름에 'respeaker'/'seeed' 가 든 첫 장치 인덱스. 없으면 None(기본 장치)."""
     import sounddevice as sd  # 지연 import

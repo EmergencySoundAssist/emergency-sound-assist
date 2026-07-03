@@ -99,14 +99,16 @@ python -m stt.run --mic --respeaker --model medium        # 8GB 메모리·지�
 python -m stt.run --mic --respeaker --beam 3              # beam 직접 지정
 ```
 
-### 더 짜낼 수 있는 것 (검증됨, 효과 큼 / 작업량 있음 — 로드맵)
-1. **ReSpeaker XVF-3000 DSP 튜닝** (range/high·low) — pyusb 로 HPF·노이즈서프레션·AGC 레지스터 조정(보드+하드웨어 필요). doa 브랜치 `respeaker_tuning.py` 재사용.
-2. **적응형 sub-frame VAD + pre-roll/hangover** (range/high) — 고정 임계 대신 노이즈 플로어 추적(30ms 프레임), 발화 앞뒤 여유 버퍼 → 잘림 방지·범위↑.
-3. **Silero VAD stage-2** (range/high) — 보드에선 `silero-vad[onnx-gpu]` 로(❗ 기본 설치는 torch 끌어와 충돌 → `--no-deps` 규율). `_Engine` 추상화 뒤에 게이트로 끼움.
-4. **SNR-게이트 DeepFilterNet 디노이징** (range/med) — **기본 OFF**, 저SNR(<~12dB)에서만. 실차 녹음으로 A/B 후 결정(Orin CPU 부하 측정 필수).
-5. **모델 large-v3-turbo** 평가 (accuracy) — 멀티링궐·4 디코더층, int8 ~1.5GB. 지연 허용되면.
+### 적용됨
+- **webrtcvad VAD** — 말소리/비음성 구분(노이즈 환각 억제). torch 0(Jetson 호환). 없으면 energy 폴백. `pip install webrtcvad-wheels` 권장. 강제: `--vad`(energy 임계)·config `vad_backend`.
+- **스레드 캡처** — 변환(블로킹) 중에도 마이크를 계속 읽어 입력이 안 끊김. 끄려면 `--no-thread`.
 
-> 범위·정확도엔 ① ReSpeaker DSP 튜닝, ② 적응형 VAD가 체감상 가장 큼. 디노이징·큰 모델은 **반드시 실차 녹음으로 검증 후** 적용.
+### 더 짜낼 수 있는 것 (로드맵)
+1. **ReSpeaker XVF-3000 DSP 튜닝** (range) — pyusb 로 HPF·노이즈서프레션·AGC 레지스터 조정(보드+하드웨어). doa 브랜치 `respeaker_tuning.py` 재사용.
+2. **Silero VAD(onnx 직접)** (range) — webrtcvad 가 실차에서 부족하면, silero_vad.onnx 를 onnxruntime 으로 직접 구동(torch 없이). VAD 가 교체 가능하게 돼 있어 `stt/vad.py` 에 클래스만 추가.
+3. **SNR-게이트 DeepFilterNet 디노이징** (range/med) — **기본 OFF**, 저SNR 에서만. 실차 녹음 A/B 후.
+
+> 범위·정확도엔 ① ReSpeaker DSP 튜닝이 다음 큰 카드. 디노이징·더 큰 모델은 **반드시 실차 녹음으로 검증 후** 적용.
 
 ## 두 갈래로 보면 간단
 | 목적 | 방법 | 난이도 |
