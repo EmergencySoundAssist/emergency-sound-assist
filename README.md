@@ -43,6 +43,7 @@ python classify.py --mic              # 실시간 마이크
 python main.py --demo                          # 합성 (방향은 미상 — 1채널)
 python main.py --mic --channels 6              # ReSpeaker 자동 탐지 (미탐지 시 --device N 지정)
 python main.py --mic --channels 6 --stt --stt-model small   # + 평상시 자막 (CPU는 small, 노트북 데모는 tiny)
+python main.py --mic --channels 6 --stt --stt-model small --hud   # + HUD 화면(방향 레이더·자막). 창모드 --hud-windowed / 반사 --hud-flip
 #   시작 로그 "[audio] 입력 장치: …" 로 어떤 마이크가 열렸는지 확인 (5초 연속 무음이면 경고 출력)
 #   STT 는 백그라운드 스레드로 돌아 메인을 안 막음 / 사이렌·경적일 땐 자동 멈춤 / faster-whisper 필요
 

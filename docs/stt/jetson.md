@@ -143,6 +143,28 @@ python -u main.py --mic --channels 6 --stt --stt-model small
 4. `| tee` 등 파이프로 로그를 뜰 때는 `python -u`(stdout 언버퍼) 필수 — 안 그러면 진행 줄이 한참 안 보인다.
 5. `[audio] 경고: … 연속 무음` 이 뜨면 ch0 에 소리가 안 들어오는 상태(장치 오선택) — 1번으로.
 
+## 5.6 HUD 화면 (Jetson 직결 디스플레이)
+
+```bash
+sudo apt install fonts-nanum          # 한글 폰트(없으면 □□로 깨짐)
+pip install "pygame>=2.1"             # 보드 venv에 설치(aarch64 휠)
+python -u main.py --mic --channels 6 --stt --stt-model small --hud
+```
+- 긴급(사이렌·경적): 방향 레이더에 방향 섹터 점등 + 소리·접근 표시. 평상시: 하단 자막 밴드.
+- 종료 `ESC`/`Q`/창 닫기 · 반사(윈드실드 상하반전) 토글 `F` · 시작부터 반사면 `--hud-flip`.
+- 노트북 개발은 `--hud-windowed`(창 모드).
+
+### 부팅 자동시작
+
+```bash
+sudo cp deploy/emergency-hud.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now emergency-hud.service
+journalctl -u emergency-hud -f        # 로그 확인
+```
+- 유닛의 `User`·경로·`DISPLAY`/`XAUTHORITY`를 보드 계정(예: dcnm)·그래픽 세션에 맞춘다.
+- `pygame.error: ... video system` / 권한 거부면 로그인 세션에서 `xhost +SI:localuser:dcnm` 후 재시작.
+
 ## 6. 트러블슈팅
 
 | 증상 | 원인 / 해결 |
