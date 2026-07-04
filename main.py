@@ -78,6 +78,8 @@ def _run_with_hud(source, stt_worker, args) -> None:
     import threading
     cfg = HudConfig(fullscreen=not args.hud_windowed, reflect=args.hud_flip)
     hud = HudDisplay(cfg)
+    # --demo/--wav처럼 유한 소스면 파이프라인 스레드는 소스 소진 시 끝나지만, HUD 창은
+    # 의도적으로 ESC/Q 입력 전까지 마지막 프레임을 유지한다 (daemon 스레드라 종료를 막지 않음).
     worker = threading.Thread(
         target=run_stream, args=(source, stt_worker, hud),
         name="pipeline", daemon=True)

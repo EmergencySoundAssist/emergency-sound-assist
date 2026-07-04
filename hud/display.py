@@ -20,7 +20,7 @@ class HudDisplay:
         self._config = config
         self._lock = threading.Lock()
         self._latest = None
-        self._stop = False
+        self._stop = threading.Event()
         self._screen = None
         self._buf = None
         self._renderer = None
@@ -32,10 +32,10 @@ class HudDisplay:
 
     @property
     def stopped(self) -> bool:
-        return self._stop
+        return self._stop.is_set()
 
     def stop(self) -> None:
-        self._stop = True
+        self._stop.set()
 
     def _init_pygame(self) -> None:
         pygame.init()
@@ -83,7 +83,7 @@ class HudDisplay:
             return
         clock = pygame.time.Clock()
         try:
-            while not self._stop:
+            while not self._stop.is_set():
                 self._tick()
                 clock.tick(self._config.fps)
         finally:
