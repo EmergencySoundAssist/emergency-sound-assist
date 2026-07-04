@@ -16,6 +16,7 @@ EmergencySoundAssist 실시간 메인 루프.
 from __future__ import annotations
 
 import argparse
+import sys
 import warnings
 
 import numpy as np
@@ -48,15 +49,44 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
-def run_stream(chunks, stt_worker=None) -> None:
+def run_stream(chunks, stt_worker=None, hud=None) -> None:
     pipe = Pipeline(stt_worker=stt_worker)
     try:
         for i, chunk in enumerate(chunks):
             fused = pipe.process(chunk)
             print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
+            if hud is not None:
+                hud.update(fused)
+                if hud.stopped:          # HUD 창이 닫히면 파이프라인도 종료
+                    break
     finally:
         if stt_worker is not None:
             stt_worker.stop()
+
+
+def _run_with_hud(source, stt_worker, args) -> None:
+    """--hud: 파이프라인을 백그라운드 스레드로, pygame 렌더 루프를 메인 스레드에서."""
+    try:
+        from hud.config import HudConfig
+        from hud.display import HudDisplay
+    except ImportError as e:
+        print(f"[hud] pygame 미설치 — HUD 없이 콘솔로 계속: {e}\n"
+              "  설치: pip install pygame", file=sys.stderr)
+        run_stream(source, stt_worker)
+        return
+
+    import threading
+    cfg = HudConfig(fullscreen=not args.hud_windowed, reflect=args.hud_flip)
+    hud = HudDisplay(cfg)
+    worker = threading.Thread(
+        target=run_stream, args=(source, stt_worker, hud),
+        name="pipeline", daemon=True)
+    worker.start()
+    try:
+        hud.run()                # 메인 스레드 블로킹 (종료 시 반환)
+    finally:
+        hud.stop()               # 파이프라인 루프도 멈추라고 신호
+        worker.join(timeout=2.0)
 
 
 def main() -> None:
@@ -75,6 +105,12 @@ def main() -> None:
     ap.add_argument("--stt-model", default=None,
                     help="STT 모델 크기/경로 (tiny/base/small/medium/…). 미지정 시 STTConfig 기본(medium). "
                          "GPU 없는 보드·노트북은 small 이하 권장 — medium 은 CPU 실시간 불가")
+    ap.add_argument("--hud", action="store_true",
+                    help="HUD 화면 출력(pygame). 전체화면 기본. 긴급이면 방향 레이더, 평상시엔 자막.")
+    ap.add_argument("--hud-windowed", action="store_true",
+                    help="HUD를 창 모드로(노트북 개발용). --hud 와 함께.")
+    ap.add_argument("--hud-flip", action="store_true",
+                    help="HUD 반사(윈드실드) 모드 — 상하반전 시작. 런타임 F키로 토글.")
     args = ap.parse_args()
 
     stt_worker = None
@@ -91,15 +127,18 @@ def main() -> None:
 
     if args.demo:
         print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
-        sig = _synth_passby()
-        run_stream(iter_chunks_from_array(sig), stt_worker)
+        source = iter_chunks_from_array(_synth_passby())
     elif args.wav:
         print(f"== WAV: {args.wav} ==")
-        sig = load_wav(args.wav)
-        run_stream(iter_chunks_from_array(sig), stt_worker)
+        source = iter_chunks_from_array(load_wav(args.wav))
     else:
         print("== MIC: 실시간 (Ctrl+C 종료) ==")
-        run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels), stt_worker)
+        source = iter_chunks_from_mic(device=args.device, channels=args.channels)
+
+    if args.hud:
+        _run_with_hud(source, stt_worker, args)
+    else:
+        run_stream(source, stt_worker)
 
 
 if __name__ == "__main__":
