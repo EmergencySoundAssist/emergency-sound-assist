@@ -13,6 +13,10 @@
 조건: corpus = clean/snr10/snr5/snr0 각 50. tts = loudspeaker 75(소음 SNR 10/5/0 순환)
 + 나머지 75 를 4조건 순환. 노이즈 = DEMAND TCAR/TBUS/STRAFFIC + MS-SNSD 차량 4종.
 
+데이터 출처·라이선스: zeroth-korean(CC-BY-4.0), google/fleurs(CC-BY-4.0), DEMAND(Zenodo
+1227121, CC BY-SA 3.0 으로 취급), MS-SNSD(코드 MIT, 오디오 CC0/CC BY-SA 혼재), edge-tts
+합성음(Microsoft Edge 온라인 TTS 산출물). 평가셋을 팀원/Jetson 에 복사·배포할 때 출처 표기 필요.
+
 ## 스펙 편차 (2026-07-06 확정)
 
 - Common Voice ko 제외 — Mozilla 가 2025-10 HF 배포 중단(Data Collective 이관).
@@ -30,6 +34,8 @@
 - 확성기는 근사 시뮬(밴드패스+클립+반사 1개), 실측 IR 아님.
 - 숫자 표기(10↔십)는 CER 페널티로 남음.
 - 발화 단위 파일 평가라 VAD/버퍼링 미경유(배포 경로와 차이).
+- 참고용 WER 은 정규화 없이 원문 그대로 계산됨(스펙 §3의 정규화 규칙은 CER 에만 적용 —
+  띄어쓰기 차이도 WER 오류로 집계).
 
 ## baseline 측정 결과 (2026-07-06 측정, n=350/arm)
 
