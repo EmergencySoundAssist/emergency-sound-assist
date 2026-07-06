@@ -50,15 +50,19 @@ _TO_SUBTYPE = {
     "police": SirenSubtype.POLICE,
     "fire": SirenSubtype.FIRE,
 }
-_SUBTYPE_PATH = Path(__file__).resolve().parent / "models" / "subtype_cnn_attn_s42.onnx"
+_SUBTYPE_PATH = Path(__file__).resolve().parent / "models" / "subtype_cnn_attn_yt_s42.onnx"   # yt=실채널 파인튜닝판
 SUBTYPE_CONF = 0.6        # 미만이면 '긴급차량'(UNKNOWN)으로 일반화 (경찰↔구급 혼동 회피)
 
-# ── 접근 속도(사이렌 빠르기) — ViT speed_neural 모델 (기본 OFF) ──────
-# ⚠ ViT 경고: 실주행 미검증·정지 환각 → "검증 전 배포 금지". 실도로 검증 통과 전엔 끈다.
-# 접근 빠르기 1~5단계는 approach 모듈(음량 기울기)이 담당 — 견고·스피커 크기 불변.
-# 검증 후 켜려면 SPEED_ENABLED=True (검출과 멜 동일 hop512/216 → 같은 윈도우 재사용).
-SPEED_ENABLED = False
-_SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural.onnx"
+# ── 속도+움직임 (하이브리드: 석우 speed_neural_dir — 정지/접근/멀어짐 헤드) ──
+# dir 헤드가 접근/움직임 판정 담당 (음량 기울기 대체 — 사용자 확정, 비교 실험 브랜치).
+# 출력 3개: speed(km/h)·f0·dir(0=정지/1=접근/2=멀어짐, alert.DIR_KO 순서).
+SPEED_ENABLED = False        # (legacy infer() 경로용 — 하이브리드는 speed_dir()를 직접 씀)
+_SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural_dir.onnx"
+
+# ── 2초 예비검출 (석우 이중 창 — 같은 가중치, 창만 87프레임) ────────────
+# 5초 확정보다 먼저 우는 "빠른 귀" (PRE 예비경보 ~1.8s). 없으면 이중 창 생략.
+_FAST_PATH = Path(__file__).resolve().parent / "models" / "cnn_attn_full_s42_87f.onnx"
+FAST_FRAMES = 87
 
 
 def _kmh_to_level(v_kmh: float) -> int:
@@ -113,6 +117,11 @@ def _softmax(z: np.ndarray) -> np.ndarray:
     return e / e.sum()
 
 
+def _norm_win(m: np.ndarray) -> np.ndarray:
+    """윈도우별 정규화 (학습과 동일) — 확정 5초 창과 예비 2초 창을 각자 정규화."""
+    return ((m - m.mean()) / (m.std() + 1e-5)).astype(np.float32)
+
+
 # ── 추론기 (상태 보유: 5초 롤링 버퍼) ────────────────────────────────
 class _OnnxClassifier:
     def __init__(self) -> None:
@@ -125,6 +134,10 @@ class _OnnxClassifier:
         self._spd_sess = None
         self._spd_in = None
         self._spd_unavailable = False        # 속도 모델 없음 확인 후 재시도 방지
+        self._fast_sess = None
+        self._fast_in = None
+        self._fast_unavailable = False       # 예비검출(87f) 없음 확인 후 재시도 방지
+        self._last_x = None                  # analyze()의 정규화 5초 창 — 차종/속도가 재사용
 
     def _session(self):
         if self._sess is None:
@@ -191,34 +204,90 @@ class _OnnxClassifier:
         v = max(0.0, float(np.asarray(out[0]).ravel()[0]))
         return _kmh_to_level(v), v
 
+    def _fast_session(self):
+        """2초 예비검출(87f) 세션 (lazy). 파일 없으면 None — 이중 창 생략(graceful)."""
+        if self._fast_sess is None and not self._fast_unavailable:
+            if not _FAST_PATH.exists():
+                self._fast_unavailable = True
+                print(f"[classifier] 예비검출 모델 없음({_FAST_PATH.name}) → 이중 창 생략")
+                return None
+            import onnxruntime as ort            # 지연 import
+            prefer = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+            providers = [p for p in prefer if p in ort.get_available_providers()]
+            self._fast_sess = ort.InferenceSession(str(_FAST_PATH), providers=providers)
+            self._fast_in = self._fast_sess.get_inputs()[0].name
+        return self._fast_sess
+
     def reset(self) -> None:
         self._buf = np.zeros(0, dtype=np.float32)
+        self._last_x = None
 
-    def infer(self, chunk: AudioChunk) -> ClassResult:
+    # ── 하이브리드 API — 마진 판정 + 창 재사용 (석우 infer_trt.step 방식) ──
+    def analyze(self, chunk: AudioChunk):
+        """청크 누적 → 멜 1회 → 검출 로짓 **마진**(5초 확정 + 2초 예비).
+
+        softmax(1.000 포화) 대신 마진 z[cls]-max(나머지)로 게이트 판정(alert.Gate 입력).
+        정규화된 5초 창을 보관(self._last_x) → subtype_probs()/speed_dir()가 재사용(멜 1회).
+        반환: dict(label, conf, m_siren, m_horn, m_fast|None) — 버퍼 부족(워밍업)이면 None.
+        """
         y = _resample(_mono(chunk.samples), chunk.sample_rate, SR_MODEL)
         self._buf = np.concatenate([self._buf, y])[-BUF_SAMPLES:]
         if self._buf.size < N_FFT:               # 아직 너무 짧음
-            return ClassResult.from_label(SoundClass.NORMAL_TRAFFIC, 0.0)
+            return None
 
-        m = _logmel(self._buf)[:, -N_FRAMES:]    # 최근 5초 윈도우
+        m = _logmel(self._buf)[:, -N_FRAMES:]    # 최근 5초 윈도우 (미정규화)
         if m.shape[1] < N_FRAMES:                # 버퍼가 5초 미만이면 끝을 무음 패딩
             m = np.pad(m, ((0, 0), (0, N_FRAMES - m.shape[1])), constant_values=PAD_VAL)
-        x = (m - m.mean()) / (m.std() + 1e-5)    # 윈도우별 정규화
-        x = np.ascontiguousarray(x[None, None], dtype=np.float32)   # (1,1,64,216)
+        x = np.ascontiguousarray(_norm_win(m)[None, None], dtype=np.float32)   # (1,1,64,216)
 
-        logits = self._session().run(None, {self._in: x})[0][0]
-        prob = _softmax(logits)
+        z = self._session().run(None, {self._in: x})[0][0]
+        m_siren = float(z[0] - max(z[1], z[2]))
+        m_horn = float(z[1] - max(z[0], z[2]))
+        prob = _softmax(z)
         i = int(prob.argmax())
-        label = _TO_SOUNDCLASS[CLASSES[i]]
 
-        subtype, sub_conf = None, None
-        speed_level, speed_kmh = None, None
-        if label is SoundClass.SIREN:            # 차종은 사이렌일 때만 (멜 그대로 재사용)
-            subtype, sub_conf = self._infer_subtype(x)
-            if SPEED_ENABLED:                    # 신경망 속도 — 실도로 검증 전 기본 OFF
-                speed_level, speed_kmh = self._infer_speed(x)
-        return ClassResult.from_label(label, float(prob[i]), subtype, sub_conf,
-                                      speed_level, speed_kmh)
+        m_fast = None
+        fs = self._fast_session()
+        if fs is not None:                        # 예비: 같은 멜의 끝 2초만, 별도 정규화
+            xf = np.ascontiguousarray(_norm_win(m[:, -FAST_FRAMES:])[None, None], dtype=np.float32)
+            zf = fs.run(None, {self._fast_in: xf})[0][0]
+            m_fast = float(zf[0] - max(zf[1], zf[2]))
+
+        self._last_x = x
+        return {"label": _TO_SOUNDCLASS[CLASSES[i]], "conf": float(prob[i]),
+                "m_siren": m_siren, "m_horn": m_horn, "m_fast": m_fast}
+
+    def subtype_probs(self):
+        """마지막 analyze 창 → 차종 softmax 확률[3] (yt 파인튜닝판). 모델 없으면 None.
+        투표(SubtypeVote)는 pipeline 이 담당 — 여기선 확률만."""
+        sess = self._subtype_session()
+        if sess is None or self._last_x is None:
+            return None
+        logits = sess.run(None, {self._sub_in: self._last_x})[0][0]
+        return _softmax(logits)
+
+    def speed_dir(self):
+        """마지막 analyze 창 → (v̂ km/h, dir_idx). dir: 0=정지/1=접근/2=멀어짐 (alert.DIR_KO).
+        모델 없으면 (None, None). tier 스무딩(SpeedTracker)은 pipeline 담당."""
+        sess = self._speed_session()
+        if sess is None or self._last_x is None:
+            return None, None
+        outs = sess.run(None, {self._spd_in: self._last_x})
+        v = dir_idx = None
+        for a in outs:                            # 이름 무관 — 크기로 식별 (석우 방식)
+            a = np.asarray(a)
+            if a.size == 1:
+                v = max(0.0, float(a.reshape(-1)[0]))
+            elif a.size == 3:
+                dir_idx = int(a.reshape(-1).argmax())
+        return v, dir_idx
+
+    def infer(self, chunk: AudioChunk) -> ClassResult:
+        """레거시 API (classify.py 등) — label+conf 만. 차종·속도는 하이브리드 pipeline 이 담당."""
+        res = self.analyze(chunk)
+        if res is None:
+            return ClassResult.from_label(SoundClass.NORMAL_TRAFFIC, 0.0)
+        return ClassResult.from_label(res["label"], res["conf"])
 
 
 _CLF = _OnnxClassifier()
@@ -227,6 +296,21 @@ _CLF = _OnnxClassifier()
 def infer(chunk: AudioChunk) -> ClassResult:
     """AudioChunk → ClassResult (cnn_attn_full ONNX 추론, 5초 롤링 버퍼)."""
     return _CLF.infer(chunk)
+
+
+def analyze(chunk: AudioChunk):
+    """하이브리드: 마진(5s 확정+2s 예비) dict. 워밍업이면 None."""
+    return _CLF.analyze(chunk)
+
+
+def subtype_probs():
+    """하이브리드: 마지막 창의 차종 확률[3] | None."""
+    return _CLF.subtype_probs()
+
+
+def speed_dir():
+    """하이브리드: (v̂ km/h, dir_idx 0정지/1접근/2멀어짐) | (None, None)."""
+    return _CLF.speed_dir()
 
 
 def reset() -> None:

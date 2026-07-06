@@ -1,25 +1,19 @@
 """
-모듈(분류·방향·접근·STT)을 묶어 FusedResult를 만드는 실시간 파이프라인.
+하이브리드 실시간 파이프라인 — 석우(ViT deploy) 경보 엔진 + 우리 방향/STT.  (exp/hybrid-runtime)
 
-흐름 (docs/architecture.md):
-  chunk → ① classifier.infer (ch0)
-        → 긴급(siren/horn): ② 방향 + ③ 접근  ·  STT 멈춤(우선순위 전환)
-        → 평상시(noise)   : ④ STT 워커에 청크 전달(자막은 뒤에서)
-        → FusedResult → "구급차, 후방, 접근 중"  또는  "… · 자막: …"
+  chunk(0.15s tick) → 검출 마진(5s 확정 + 2s 예비 87f) → alert 상태기계(Gate)
+    긴급 활성:  차종 다수결(SubtypeVote, yt판) + 속도·움직임(dir 헤드→SpeedTracker tier)
+               + 방향(SRP-PHAT, ch1~4 롤링 0.5s)  ·  STT reset(발화 버퍼 비움)
+    평상시   :  STT — 0.15s 청크를 ★1초 뭉치로 모아 워커에 feed
+               (silence_release 가 청크 개수 기준이라, 잘게 넣으면 숨쉬기에 발화가 잘림 — 확정 결정)
 
-분류가 '긴급/평상시 스위치' 역할 (docs 1단계 게이트):
-  - 사이렌·경적이면 긴급 경고에 집중하고 STT 는 멈춘다(reset). 긴급↔STT 우선순위 전환.
-  - 그 외(noise) 면 STT 워커에 청크를 흘려보낸다. 말소리면 워커가 자막을 만든다.
+  process(chunk) → (alert.AlertEvent, info)
+    info: m_siren/state/level/risk/dir_raw(즉시)/direction/angle/speech/label/conf
 
-★ STT 는 **백그라운드 워커(스레드)** 로 돈다 (stt.worker.STTWorker):
-  - process() 는 worker.feed()/reset() 만 호출하고 **즉시 반환**한다(블로킹 X).
-    → STT 가 인식하는 동안에도 분류·방향·접근은 멈추지 않는다(사이렌 놓침 방지).
-  - 완성된 자막은 worker.latest() 로 가져와 FusedResult.speech 에 실어 보낸다.
-  - stt_worker=None 이면 STT 없이 동작(기존과 동일).
-
-채널 처리:
-  - 다채널 (n, C) 이면 ch0(처리채널)을 분류·접근·STT 에, ch1~4 를 방향(SRP)에 쓴다.
-  - 1채널이면 방향은 ReSpeaker 자체 DoA 폴백(없으면 미상).
+lean(feat/lean-integration) 대비 변경:
+  매 tick FusedResult → 상태기계 이벤트(ONSET/REMIND/CLEAR, 켜기 쉽게/끄기 느리게)
+  접근 음량기울기 → dir 신경망(정지/접근/멀어짐) — 사용자 확정으로 교체 (approach 모듈은 미연결 보존)
+  차종 부활 (yt 실채널 파인튜닝판 + 6초 다수결)
 """
 
 from __future__ import annotations
@@ -28,85 +22,129 @@ from typing import Optional
 
 import numpy as np
 
-from core.types import (
-    AudioChunk,
-    FusedResult,
-    DirectionResult,
-    ApproachResult,
-    SpeechResult,
-    Direction,
-    Motion,
-)
-from classifier import infer as classify
-from doa.estimator import estimate_direction
-from approach.detector import ApproachDetector
+from core.types import AudioChunk
+from classifier import inference as clf
+from pipeline import alert
+
+SUBS = ("구급차", "경찰차", "소방차")     # subtype_clf.SUBS 순서 (yt 모델 동일)
+DIR_WIN_S = 0.5                           # 방향(SRP) 분석 창 — 다채널 롤링 버퍼 길이(초)
 
 
 class Pipeline:
-    """청크 단위 실시간 처리기. process(chunk) → FusedResult.
+    """청크(0.15s 권장) 단위 처리기. process(chunk) → (AlertEvent, info).
 
-    stt_worker: stt.worker.STTWorker 인스턴스(선택). None 이면 STT 비활성(자막 없음).
-                feed/reset/latest 인터페이스만 쓰므로 비동기 워커가 메인을 막지 않는다.
+    stt_worker: stt.worker.STTWorker (선택). None 이면 자막 없음.
+    dt: tick 간격(초) — Gate/SpeedTracker/SubtypeVote 시간상수를 dt 무관하게 유지.
     """
 
-    def __init__(self, stt_worker: Optional["object"] = None) -> None:
-        self._approach = ApproachDetector()
-        self._active = False
-        self._stt = stt_worker           # 평상시 음성→자막 (백그라운드, 없으면 STT 생략)
+    def __init__(self, stt_worker=None, dt: float = 0.15) -> None:
+        self.dt = dt
+        self._stt = stt_worker
+        self.g_siren = alert.Gate(alert.CFG["siren"], dt)
+        self.g_horn = alert.Gate(alert.CFG["horn"], dt)
+        self.g_fast = alert.Gate(alert.CFG["siren_fast"], dt)
+        # 시간상수(중앙값≈2.2s·전환≈1s·차종투표≈6s) 유지 — 석우 UnifiedRuntime 과 동일 계산
+        self.vtrack = alert.SpeedTracker(n_med=max(3, round(2.25 / dt)) | 1,
+                                         k_switch=max(2, round(1.0 / dt)))
+        self.svote = alert.SubtypeVote(SUBS, win=max(8, round(6.0 / dt)))
+        self._stt_acc: list = []                  # ★ STT 1초 뭉치 누적
+        self._stt_len = 0
+        self._dir_buf: Optional[np.ndarray] = None   # (n,4) 방향용 롤링
+        self._dir_sr: Optional[int] = None
 
-    def process(self, chunk: AudioChunk) -> FusedResult:
-        mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
-        cls = classify(mono_chunk)
-        speech: Optional[SpeechResult] = None
+    def process(self, chunk: AudioChunk):
+        s = np.asarray(chunk.samples)
+        mono = s[:, 0] if s.ndim == 2 else s      # ch0 = 처리채널 (검출·차종·속도·STT)
+        self._push_dir(s, chunk.sample_rate)      # ch1~4 = 방향용 롤링
 
-        if cls.is_emergency:                     # ── 긴급: 경고 집중, STT 멈춤 ──
-            self._active = True
-            direction = self._direction(chunk)
-            approach = self._approach.update(mono_chunk)
-            if self._stt is not None:
-                self._stt.reset()                # 긴급 진입 → 발화 버퍼 비움(즉시 반환)
-        else:                                    # ── 평상시: STT 워커로 자막 ──
-            if self._active:                     # 긴급음 종료 → 접근 추세 상태 초기화
-                self._approach.reset()
-                self._active = False
-            direction = DirectionResult(direction=Direction.UNKNOWN)
-            approach = ApproachResult(motion=Motion.UNKNOWN)
-            if self._stt is not None:
-                self._stt.feed(mono_chunk)       # 워커에 전달(블로킹 X)
-                speech = self._stt.latest()      # 뒤에서 완성된 자막 있으면 실어 보냄
+        res = clf.analyze(AudioChunk(samples=mono, sample_rate=chunk.sample_rate))
+        if res is None:                           # 워밍업(버퍼 부족)
+            return alert.build_event("none", 0.0, None), {}
 
-        return FusedResult(sound=cls, direction=direction, approach=approach, speech=speech)
+        sg = self.g_siren.update(res["m_siren"])
+        hg = self.g_horn.update(res["m_horn"])
+        fg = self.g_fast.update(res["m_fast"]) if res["m_fast"] is not None else None
 
-    def _direction(self, chunk: AudioChunk) -> DirectionResult:
-        """다채널이면 ch1~4 SRP-PHAT, 1채널이면 ReSpeaker 자체 DoA 폴백."""
-        raw4 = _raw4(np.asarray(chunk.samples))
-        if raw4 is None:
-            return estimate_direction(chunk)     # 1채널: USB 자체 DoA (없으면 미상)
+        sub = risk = None
+        dir_idx = None
+        pre = False
+        if sg["active"]:                          # 우선순위: 확정 siren > 예비(PRE) > horn
+            kind, margin, gate = "siren", res["m_siren"], sg
+            v, dir_idx = clf.speed_dir()
+            if v is not None:
+                risk = self.vtrack.update(v, dir_idx)   # tier 스무딩(중앙값+히스테리시스+방향다수결)
+            if self.g_siren.state == "ON":              # FALLING(꺼진 꼬리) 중엔 새 투표 없음
+                sp = clf.subtype_probs()
+                if sp is not None:
+                    self.svote.add(sp, clf.SUBTYPE_CONF)
+            if self.svote.n_seen:
+                sub = self.svote.label()                # 다수결 라벨 (단일 tick 아님)
+        elif fg is not None and fg["active"]:
+            kind, margin, gate, pre = "siren", res["m_fast"], fg, True   # 예비경보(짧은 창)
+        elif hg["active"]:
+            kind, margin, gate = "horn", res["m_horn"], hg
+        else:
+            kind, margin = "none", 0.0
+            gate = {"onset": False, "remind": False,
+                    "clear": sg["clear"] or hg["clear"] or bool(fg and fg["clear"])}
+        if sg["clear"]:                            # 경보 해제 → 다음 경보 위해 리셋
+            self.vtrack.reset()
+            self.svote.reset()
+
+        emergency = sg["active"] or hg["active"] or bool(fg and fg["active"])
+        direction, angle = self._direction() if emergency else (None, None)
+        speech = self._stt_step(mono, chunk.sample_rate, emergency)
+
+        ev = alert.build_event(kind, margin, gate, sub, risk, pre=pre)
+        info = dict(m_siren=res["m_siren"], state=self.g_siren.state, level=ev.level,
+                    risk=risk, dir_raw=dir_idx, direction=direction, angle=angle,
+                    speech=speech, label=res["label"], conf=res["conf"])
+        return ev, info
+
+    # ------------------------------------------------------------------
+    def _push_dir(self, s: np.ndarray, sr: int) -> None:
+        """다채널이면 ch1~4(원본 마이크)를 방향용 롤링 버퍼(0.5s)에 누적."""
+        if s.ndim != 2:
+            return
+        if s.shape[1] >= 5:
+            raw4 = s[:, 1:5]
+        elif s.shape[1] == 4:
+            raw4 = s
+        else:
+            return
+        if self._dir_buf is None or self._dir_sr != sr:
+            self._dir_buf = np.zeros((0, 4), dtype=np.float32)
+            self._dir_sr = sr
+        n = int(DIR_WIN_S * sr)
+        self._dir_buf = np.concatenate([self._dir_buf, raw4.astype(np.float32)])[-n:]
+
+    def _direction(self):
+        """롤링 4채널 → SRP-PHAT 방향. 채널/의존성 없으면 (None, None) — graceful."""
+        if (self._dir_buf is None or self._dir_sr is None
+                or len(self._dir_buf) < int(DIR_WIN_S * self._dir_sr)):
+            return None, None
         try:
             from doa.multi_source import estimate_multiple_directions
-            results = estimate_multiple_directions(raw4, fs=chunk.sample_rate)
+            results = estimate_multiple_directions(self._dir_buf, fs=self._dir_sr)
         except Exception:
-            return estimate_direction(chunk)     # pyroomacoustics 미설치 등 → 폴백
+            return None, None
         if not results:
-            return DirectionResult(direction=Direction.UNKNOWN)
-        angle, direction = results[0]            # 에너지 가장 센 방향
-        return DirectionResult(direction=direction, angle_deg=angle)
+            return None, None
+        angle, direction = results[0]              # 에너지 가장 센 방향
+        return direction, angle
 
-
-def _channel0(chunk: AudioChunk) -> AudioChunk:
-    """다채널이면 ch0(ReSpeaker 빔포밍 처리채널)만, 1채널이면 그대로."""
-    s = np.asarray(chunk.samples)
-    mono = s[:, 0] if s.ndim == 2 else s
-    return AudioChunk(samples=mono, sample_rate=chunk.sample_rate)
-
-
-def _raw4(s: np.ndarray):
-    """방향용 4채널 추출. ReSpeaker 6채널→ch1~4, 4채널→그대로, 그 외→None."""
-    if s.ndim != 2:
-        return None
-    c = s.shape[1]
-    if c >= 5:
-        return s[:, 1:5]     # ReSpeaker: ch1~4 원본 마이크
-    if c == 4:
-        return s             # 4채널 직접 입력(합성/테스트)
-    return None
+    def _stt_step(self, mono: np.ndarray, sr: int, emergency: bool):
+        """긴급이면 reset, 평상시엔 ★1초 뭉치로 모아 feed. 완성 자막을 돌려준다."""
+        if self._stt is None:
+            return None
+        if emergency:                              # 긴급 우선 — 모으던 발화도 버림
+            self._stt.reset()
+            self._stt_acc, self._stt_len = [], 0
+            return None
+        self._stt_acc.append(np.asarray(mono, dtype=np.float32))
+        self._stt_len += len(mono)
+        if self._stt_len >= sr:                    # 1초 모임 → 워커로 (tick 크기와 무관)
+            bundle = np.concatenate(self._stt_acc)
+            self._stt_acc, self._stt_len = [], 0
+            self._stt.feed(AudioChunk(samples=bundle, sample_rate=sr))
+        return self._stt.latest()
