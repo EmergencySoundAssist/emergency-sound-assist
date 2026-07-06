@@ -1,0 +1,76 @@
+text,category,keywords
+차 세우세요,police,세우
+갓길에 정차하세요,police,갓길|정차
+우측으로 이동하세요,police,우측|이동
+전방 차량 정지하세요,police,정지
+검문이 있겠습니다,police,검문
+면허증 좀 보여주세요,police,면허증
+속도를 줄이세요,police,속도
+안전벨트 착용하세요,police,안전벨트
+뒤차는 대기해 주세요,police,대기
+이 차선은 통제 중입니다,police,통제
+유턴하지 마세요,police,유턴
+서행하세요,police,서행
+창문 좀 내려 주세요,police,창문
+음주 단속 중입니다,police,음주|단속
+차량 이동해 주세요,police,이동
+구급차 지나갑니다,rescue,구급차
+길 터주세요,rescue,터주
+불이야,rescue,불이야
+사람이 다쳤어요,rescue,다쳤
+구급차가 갑니다 비켜주세요,rescue,구급차|비켜
+응급 환자가 있습니다,rescue,응급|환자
+소방차 지나갑니다,rescue,소방차
+길을 비켜 주시기 바랍니다,rescue,비켜
+사고가 났어요,rescue,사고
+도와주세요,rescue,도와
+여기 사람 있어요,rescue,사람
+부상자가 있습니다,rescue,부상자
+앞차 양보해 주세요,rescue,양보
+구조대가 진입합니다,rescue,구조대
+대피하세요,rescue,대피
+조심하세요,pedestrian,조심
+뒤에 차 와요,pedestrian,뒤|차
+사람 있어요 조심하세요,pedestrian,사람|조심
+위험해요 물러나세요,pedestrian,위험|물러
+앞에 보세요,pedestrian,앞
+차 온다 비켜,pedestrian,차|비켜
+아이가 있어요 천천히 가세요,pedestrian,아이|천천히
+문 열려요 조심하세요,pedestrian,문|조심
+자전거 지나가요,pedestrian,자전거
+오토바이 조심하세요,pedestrian,오토바이
+여기 미끄러워요,pedestrian,미끄러
+뒤로 물러서 주세요,pedestrian,물러서
+짐 떨어져요,pedestrian,떨어져
+그쪽으로 가지 마세요,pedestrian,가지마
+잠깐만요 멈추세요,pedestrian,멈추
+터널 내 사고가 발생했습니다,announce,터널|사고
+우회하시기 바랍니다,announce,우회
+전방에 공사 구간이 있습니다,announce,공사
+안전거리를 유지하시기 바랍니다,announce,안전거리
+낙하물이 있으니 주의하세요,announce,낙하물
+짙은 안개로 서행 운전하세요,announce,안개|서행
+결빙 구간입니다 감속하세요,announce,결빙|감속
+사고 처리 중이니 차로를 변경하세요,announce,사고|차로
+어린이 보호구역입니다,announce,보호구역
+잠시 후 출발하겠습니다,announce,출발
+비상 상황이 발생했습니다,announce,비상
+침착하게 대피해 주시기 바랍니다,announce,침착|대피
+차량을 갓길로 이동해 주십시오,announce,갓길
+도로가 통제되고 있습니다,announce,통제
+안전한 곳으로 이동하시기 바랍니다,announce,안전|이동
+비켜요,shout,비켜
+위험해,shout,위험
+멈춰요,shout,멈춰
+스톱,shout,스톱
+조심해,shout,조심
+빨리요,shout,빨리
+안 돼요,shout,안돼
+저기요,shout,저기
+잠깐만요,shout,잠깐
+뒤에요,shout,뒤
+불났어요,shout,불났
+피하세요,shout,피하
+살려주세요,shout,살려
+나와요,shout,나와
+차 조심해,shout,차|조심
