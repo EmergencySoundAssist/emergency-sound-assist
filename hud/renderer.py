@@ -40,6 +40,19 @@ def vehicle_color(sound_text: str) -> tuple:
         return VEH_FIRE
     return VEH_OTHER
 
+
+def _glow_segment(surface, x, y, w, h, color, b):
+    """밝기 b(0~1)로 LED 세그먼트 + 글로우. b<=0이면 꺼진 세그먼트(DIM)."""
+    if b <= 0.0:
+        pygame.draw.rect(surface, DIM, (x, y, w, h), border_radius=5)
+        return
+    glow = pygame.Surface((w + 24, h + 24), pygame.SRCALPHA)
+    pygame.draw.rect(glow, (*color, int(70 * b)),
+                     (0, 0, w + 24, h + 24), border_radius=12)
+    surface.blit(glow, (x - 12, y - 12))
+    col = tuple(int(c * (0.4 + 0.6 * b)) for c in color)
+    pygame.draw.rect(surface, col, (x, y, w, h), border_radius=5)
+
 # repo 번들 폰트(Pretendard SemiBold, OFL) — Mac·Jetson 동일 렌더 보장, 최우선.
 _BUNDLED_FONT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -77,6 +90,11 @@ class Renderer:
         self._f_mid = load_font(max(18, h // 12), config.font_path)
         self._f_small = load_font(max(12, h // 24), config.font_path)
         self._f_sub = load_font(max(20, h // 9), config.font_path)
+        # 자동차 대시보드 카드 전용 폰트 계층
+        self._f_veh = load_font(max(40, h // 12), config.font_path)   # 차종명(큰 글씨)
+        self._f_line = load_font(max(20, h // 26), config.font_path)  # 방향·상태 서브라인
+        self._f_tag = load_font(max(14, h // 40), config.font_path)   # 소label/LR
+        self._f_cap = load_font(max(30, h // 14), config.font_path)   # 하단 자막
         self._frame = 0
 
     def draw(self, surface, view) -> None:
@@ -91,46 +109,51 @@ class Renderer:
             self._draw_normal(surface, view, w, h)
 
     def _draw_emergency(self, surface, view, w, h):
-        """LED 스트립 카드: 상단 텍스트+빠르기 배지 / 중앙 LED 스트립 / 하단 자막."""
+        """자동차 대시보드 카드: 헤더 계층 / 글로우 LED 스트립 / 하단 구분선+자막."""
         self._frame = (self._frame + 1) % 100000
         color = vehicle_color(view.sound_text)
+        m = int(w * 0.0625)                      # 좌우 여백(1280 기준 80)
 
-        # 상단 좌측: 분류 텍스트
-        top = f"{view.sound_text}·{view.direction_text}·{view.motion_text}"
-        self._text(surface, top, self._f_mid, FG, 30, 24)
+        # 헤더: 작은 라벨 + 큰 차종명 + 강조선 + 방향·상태 서브라인
+        self._text(surface, "EMERGENCY VEHICLE", self._f_tag, MUTED, m, int(h * 0.097))
+        self._text(surface, view.sound_text, self._f_veh, FG, m, int(h * 0.133))
+        line_y = int(h * 0.133) + self._f_veh.get_height() + 6
+        pygame.draw.rect(surface, color, (m, line_y, int(w * 0.094), 3))
+        self._text(surface, self._subline(view), self._f_line, color, m, line_y + 10)
 
-        # 상단 우측: 빠르기 배지 (speed_level 있으면 라벨, 없으면 Motion)
-        label, period = hud_card.blink_spec(view.speed_level, view.approach_motion())
-        badge = self._f_small.render(label, True, color)
-        surface.blit(badge, (w - badge.get_width() - 30, 28))
-
-        # 중앙: LED 스트립
+        # 중앙: 글로우 LED 스트립
         n = 15
         center = hud_card.direction_to_index(view.angle_deg, view.direction, n=n)
+        _, period = hud_card.blink_spec(view.speed_level, view.approach_motion())
         lit = hud_card.is_lit_now(period, self._frame)
-        seg_w = int(w * 0.7 / n)
-        gap = int(seg_w * 0.2)
+        seg_w = int(w * 0.042)
+        gap = int(seg_w * 0.26)
         total = n * seg_w + (n - 1) * gap
         x0 = (w - total) // 2
-        y = h // 2 - 20
-        seg_h = 40
+        y = h // 2
+        seg_h = int(h * 0.064)
         for i in range(n):
             b = hud_card.segment_brightness(i, center, radius=3) if lit else 0.0
-            if b > 0.0:
-                col = tuple(int(c * b) for c in color)
-            else:
-                col = DIM
-            rx = x0 + i * (seg_w + gap)
-            pygame.draw.rect(surface, col, (rx, y, seg_w, seg_h), border_radius=4)
+            _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, seg_h, color, b)
 
         # 좌우 라벨
-        self._text(surface, "LEFT", self._f_small, MUTED, x0, y + seg_h + 8)
-        rlab = self._f_small.render("RIGHT", True, MUTED)
-        surface.blit(rlab, (x0 + total - rlab.get_width(), y + seg_h + 8))
+        ll = self._f_tag.render("L", True, MUTED)
+        surface.blit(ll, (x0 - ll.get_width() - 18, y + seg_h // 2 - ll.get_height() // 2))
+        rl = self._f_tag.render("R", True, MUTED)
+        surface.blit(rl, (x0 + total + 18, y + seg_h // 2 - rl.get_height() // 2))
 
-        # 하단: 자막(있을 때만)
+        # 하단: 구분선 + 자막(있을 때만)
         if view.subtitle:
-            self._center(surface, view.subtitle, self._f_sub, FG, w // 2, h - 60)
+            pygame.draw.rect(surface, DIM, (m, h - int(h * 0.18), w - 2 * m, 2))
+            self._center(surface, view.subtitle, self._f_cap, FG, w // 2, h - int(h * 0.1))
+
+    @staticmethod
+    def _subline(view) -> str:
+        """헤더 서브라인: 방향 알면 '좌측에서 접근 중', 미상이면 상태만."""
+        if view.direction in (Direction.LEFT, Direction.RIGHT,
+                              Direction.FRONT, Direction.REAR):
+            return f"{view.direction_text}에서 {view.motion_text}"
+        return view.motion_text
 
     def _draw_normal(self, surface, view, w, h):
         self._text(surface, view.sound_text, self._f_mid, MUTED, 24, 24)
