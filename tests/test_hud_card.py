@@ -71,3 +71,67 @@ def test_vehicle_color_mapping():
     assert vehicle_color("소방차") == VEH_FIRE
     assert vehicle_color("경적") == VEH_OTHER
     assert vehicle_color("사이렌") == VEH_OTHER      # 미상 계열 → 기타색
+
+
+def _renderer_and_surface():
+    import pygame
+    from hud.renderer import Renderer
+    from hud.config import HudConfig
+    pygame.init()
+    r = Renderer(HudConfig(width=1280, height=720, fullscreen=False))
+    return r, pygame.Surface((1280, 720))
+
+
+def _view(direction, angle_deg=None, speed_level=None, subtitle="", sound="구급차"):
+    from hud.viewmodel import HudView
+    from core.types import Motion
+    return HudView(
+        emergency=True, sound_text=sound, direction=direction,
+        direction_text="좌측", motion_text="접근 중", subtitle=subtitle,
+        confidence=0.9, angle_deg=angle_deg, speed_level=speed_level,
+        motion=Motion.APPROACHING,
+    )
+
+
+def test_render_current_state_no_crash():
+    """현재 상태(angle/speed None): 성능저하 카드가 크래시 없이 그려진다."""
+    import pygame
+    from core.types import Direction
+    r, surf = _renderer_and_surface()
+    r._draw_emergency(surf, _view(Direction.LEFT, subtitle="길 터주세요"), 1280, 720)
+    assert r._frame == 1                              # 신규 카드 렌더 경로 확인(red-green)
+    assert pygame.surfarray.array3d(surf).sum() > 0   # 뭔가 그려짐
+
+
+def test_render_future_state_no_crash():
+    """미래 상태(angle·speed 채움): 완전 카드가 크래시 없이 렌더."""
+    import pygame
+    from core.types import Direction
+    r, surf = _renderer_and_surface()
+    r._draw_emergency(surf, _view(Direction.RIGHT, angle_deg=60.0, speed_level=5,
+                                  sound="소방차"), 1280, 720)
+    assert r._frame == 1
+    assert pygame.surfarray.array3d(surf).sum() > 0
+
+
+def test_led_cluster_follows_direction():
+    """방향에 따라 점등 클러스터의 가로 위치가 좌/우로 갈린다."""
+    import numpy as np
+    import pygame
+    from core.types import Direction
+    from hud.renderer import VEH_AMBULANCE
+
+    def lit_x_center(direction):
+        r, surf = _renderer_and_surface()
+        r._draw_emergency(surf, _view(direction), 1280, 720)
+        arr = pygame.surfarray.array3d(surf)          # shape (w, h, 3)
+        # 차종색(초록)에 가까운 픽셀들의 x 무게중심
+        target = np.array(VEH_AMBULANCE)
+        mask = (np.abs(arr.astype(int) - target).sum(axis=2) < 60)
+        xs = np.where(mask.any(axis=1))[0]
+        return xs.mean() if xs.size else None
+
+    left_cx = lit_x_center(Direction.LEFT)
+    right_cx = lit_x_center(Direction.RIGHT)
+    assert left_cx is not None and right_cx is not None
+    assert left_cx < right_cx                          # 좌측 클러스터가 더 왼쪽

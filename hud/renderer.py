@@ -12,6 +12,7 @@ import sys
 import pygame
 
 from core.types import Direction
+from hud import card as hud_card
 
 # HUD 팔레트 (차량용 다크 화면 — 모드 적응 불필요, 고정)
 BG = (10, 10, 11)
@@ -69,6 +70,7 @@ class Renderer:
         self._f_mid = load_font(max(18, h // 12), config.font_path)
         self._f_small = load_font(max(12, h // 24), config.font_path)
         self._f_sub = load_font(max(20, h // 9), config.font_path)
+        self._frame = 0
 
     def draw(self, surface, view) -> None:
         w, h = surface.get_size()
@@ -82,16 +84,46 @@ class Renderer:
             self._draw_normal(surface, view, w, h)
 
     def _draw_emergency(self, surface, view, w, h):
-        side = min(h - 40, w // 2 - 40)
-        radar = pygame.Rect(20, (h - side) // 2, side, side)
-        self._draw_radar(surface, radar, view.direction)
-        tx = radar.right + 30
-        cy = h // 2
-        self._text(surface, view.sound_text, self._f_sound, FG, tx,
-                   cy - self._f_sound.get_height())
-        self._text(surface, f"{view.direction_text} · {view.motion_text}",
-                   self._f_mid, WARN, tx, cy + 10)
-        self._text(surface, "자막 — 긴급 중 일시정지", self._f_small, MUTED, tx, h - 40)
+        """LED 스트립 카드: 상단 텍스트+빠르기 배지 / 중앙 LED 스트립 / 하단 자막."""
+        self._frame = (self._frame + 1) % 100000
+        color = vehicle_color(view.sound_text)
+
+        # 상단 좌측: 분류 텍스트
+        top = f"{view.sound_text}·{view.direction_text}·{view.motion_text}"
+        self._text(surface, top, self._f_mid, FG, 30, 24)
+
+        # 상단 우측: 빠르기 배지 (speed_level 있으면 라벨, 없으면 Motion)
+        label, period = hud_card.blink_spec(view.speed_level, view.approach_motion())
+        badge = self._f_small.render(label, True, color)
+        surface.blit(badge, (w - badge.get_width() - 30, 28))
+
+        # 중앙: LED 스트립
+        n = 15
+        center = hud_card.direction_to_index(view.angle_deg, view.direction, n=n)
+        lit = hud_card.is_lit_now(period, self._frame)
+        seg_w = int(w * 0.7 / n)
+        gap = int(seg_w * 0.2)
+        total = n * seg_w + (n - 1) * gap
+        x0 = (w - total) // 2
+        y = h // 2 - 20
+        seg_h = 40
+        for i in range(n):
+            b = hud_card.segment_brightness(i, center, radius=3) if lit else 0.0
+            if b > 0.0:
+                col = tuple(int(c * b) for c in color)
+            else:
+                col = DIM
+            rx = x0 + i * (seg_w + gap)
+            pygame.draw.rect(surface, col, (rx, y, seg_w, seg_h), border_radius=4)
+
+        # 좌우 라벨
+        self._text(surface, "LEFT", self._f_small, MUTED, x0, y + seg_h + 8)
+        rlab = self._f_small.render("RIGHT", True, MUTED)
+        surface.blit(rlab, (x0 + total - rlab.get_width(), y + seg_h + 8))
+
+        # 하단: 자막(있을 때만)
+        if view.subtitle:
+            self._center(surface, view.subtitle, self._f_sub, FG, w // 2, h - 60)
 
     def _draw_normal(self, surface, view, w, h):
         self._text(surface, view.sound_text, self._f_mid, MUTED, 24, 24)
