@@ -40,8 +40,15 @@ def vehicle_color(sound_text: str) -> tuple:
         return VEH_FIRE
     return VEH_OTHER
 
+# repo 번들 폰트(Pretendard SemiBold, OFL) — Mac·Jetson 동일 렌더 보장, 최우선.
+_BUNDLED_FONT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "fonts", "Pretendard-SemiBold.otf",
+)
+
 # 한국어 폰트 후보 (없으면 다음 후보 → 최후에 기본 폰트+경고)
 _FONT_CANDIDATES = [
+    _BUNDLED_FONT,
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",

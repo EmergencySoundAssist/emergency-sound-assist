@@ -73,6 +73,18 @@ def test_vehicle_color_mapping():
     assert vehicle_color("사이렌") == VEH_OTHER      # 미상 계열 → 기타색
 
 
+def test_bundled_font_present_and_loads():
+    """Pretendard 번들 폰트가 repo에 있고 최우선 후보로 로드된다."""
+    import os
+    import pygame
+    from hud.renderer import _FONT_CANDIDATES, load_font
+    assert _FONT_CANDIDATES[0].endswith("Pretendard-SemiBold.otf")
+    assert os.path.exists(_FONT_CANDIDATES[0])       # repo에 번들됨(누락 시 실패)
+    pygame.init()
+    f = load_font(40)
+    assert f.render("긴급", True, (255, 255, 255)).get_width() > 0
+
+
 def _renderer_and_surface():
     import pygame
     from hud.renderer import Renderer
