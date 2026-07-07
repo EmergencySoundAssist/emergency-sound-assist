@@ -59,3 +59,15 @@ def test_segment_brightness_decays():
     assert segment_brightness(7, 7, radius=2) == 1.0
     assert segment_brightness(9, 7, radius=2) == 0.0   # 2칸 밖 경계(>radius)
     assert 0.0 < segment_brightness(8, 7, radius=2) < 1.0
+
+
+def test_vehicle_color_mapping():
+    """차종 텍스트 → LED 색. 미상/경적 등은 기타색."""
+    from hud.renderer import (
+        vehicle_color, VEH_AMBULANCE, VEH_POLICE, VEH_FIRE, VEH_OTHER,
+    )
+    assert vehicle_color("구급차") == VEH_AMBULANCE
+    assert vehicle_color("경찰차") == VEH_POLICE
+    assert vehicle_color("소방차") == VEH_FIRE
+    assert vehicle_color("경적") == VEH_OTHER
+    assert vehicle_color("사이렌") == VEH_OTHER      # 미상 계열 → 기타색

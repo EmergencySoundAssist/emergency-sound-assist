@@ -22,6 +22,23 @@ WARN = (239, 159, 39)      # 접근·보조(주황)
 PANEL = (20, 20, 22)
 DIM = (35, 35, 38)
 
+# 차종별 색 (LED 카드)
+VEH_AMBULANCE = (51, 220, 90)     # 구급차 초록
+VEH_POLICE = (60, 130, 246)       # 경찰차 파랑
+VEH_FIRE = (226, 75, 74)          # 소방차 빨강(=ALERT)
+VEH_OTHER = (239, 159, 39)        # 기타/경적 주황(=WARN)
+
+
+def vehicle_color(sound_text: str) -> tuple:
+    """차종 텍스트 → LED 색. 미상/경적 등은 기타색."""
+    if "구급" in sound_text:
+        return VEH_AMBULANCE
+    if "경찰" in sound_text:
+        return VEH_POLICE
+    if "소방" in sound_text:
+        return VEH_FIRE
+    return VEH_OTHER
+
 # 한국어 폰트 후보 (없으면 다음 후보 → 최후에 기본 폰트+경고)
 _FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
