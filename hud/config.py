@@ -16,7 +16,7 @@ class HudConfig:
     font_path : 한국어 폰트 경로 강제. None이면 후보 경로 자동 탐색.
     """
     width: int = 1280
-    height: int = 720
+    height: int = 360        # 윈드실드 HUD용 가로로 긴 얇은 띠(≈3.5:1)
     fullscreen: bool = True
     reflect: bool = False
     fps: int = 30
