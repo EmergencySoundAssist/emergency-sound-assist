@@ -45,6 +45,16 @@ def test_horn_is_emergency():
     assert v.sound_text == "경적"
 
 
+def test_horn_sets_is_horn_flag():
+    v = HudView.from_fused(_fused(SoundClass.HORN))
+    assert v.is_horn is True
+
+
+def test_non_horn_is_horn_false():
+    v = HudView.from_fused(_fused(SoundClass.SIREN, SirenSubtype.AMBULANCE))
+    assert v.is_horn is False
+
+
 def test_normal_with_speech_sets_subtitle():
     sp = SpeechResult(text="비켜주세요", is_speech=True)
     v = HudView.from_fused(_fused(SoundClass.NORMAL_TRAFFIC, speech=sp))

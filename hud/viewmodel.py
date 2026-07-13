@@ -52,6 +52,7 @@ class HudView:
     angle_deg: Optional[float] = None       # 연속 방향각(-90좌~+90우). 없으면 None
     speed_level: Optional[int] = None       # 접근 빠르기 1~5. 없으면 None
     motion: Motion = Motion.UNKNOWN         # 원본 Motion(렌더러 blink 판단용)
+    is_horn: bool = False                   # 경적이면 True → 접근/이동 출력 안 함
 
     def approach_motion(self) -> Motion:
         """렌더러가 blink 판단에 쓰는 원본 Motion 접근자."""
@@ -69,6 +70,7 @@ class HudView:
         subtitle = sp.text if (sp is not None and sp.is_speech and sp.text) else ""
         angle_deg = fused.direction.angle_deg
         speed_level = getattr(fused.approach, "speed_level", None)
+        is_horn = s.label is SoundClass.HORN
         return cls(
             emergency=s.is_emergency,
             sound_text=sound_text,
@@ -80,4 +82,5 @@ class HudView:
             angle_deg=angle_deg,
             speed_level=speed_level,
             motion=fused.approach.motion,
+            is_horn=is_horn,
         )

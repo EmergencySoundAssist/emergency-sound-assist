@@ -128,3 +128,20 @@ def dots_brightness(frame: int, count: int = 3, period: int = 24) -> List[float]
         tri = 1.0 - abs(2.0 * t - 1.0)                   # 0→1→0 삼각파
         out.append(0.2 + 0.8 * tri)
     return out
+
+
+def strip_lit(
+    is_horn: bool,
+    speed_level: Optional[int],
+    motion: Motion,
+    frame: int,
+) -> bool:
+    """이번 프레임에 방향 LED 스트립을 켤지 여부.
+
+    경적은 '접근 여부'를 출력하지 않으므로 깜빡이지 않고 상시 점등한다.
+    그 외에는 기존 blink 규칙(blink_spec 주기 + is_lit_now)을 따른다.
+    """
+    if is_horn:
+        return True
+    _, period = blink_spec(speed_level, motion)
+    return is_lit_now(period, frame)

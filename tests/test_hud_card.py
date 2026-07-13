@@ -201,3 +201,42 @@ def test_dots_brightness_is_periodic():
     """period 만큼 지나면 동일 상태로 되돌아온다."""
     from hud.card import dots_brightness
     assert dots_brightness(3) == dots_brightness(3 + 24)
+
+
+# ── Task 3: 경적 접근 억제 (strip_lit / _subline) ─────────────────────────
+
+def test_strip_lit_horn_always_on():
+    """경적은 접근 깜빡임 없이 상시 점등 (blink 이라면 꺼졌을 프레임에도 켜짐)."""
+    from hud.card import strip_lit
+    from core.types import Motion
+    # 비경적·접근이면 period=18 → frame=10 은 꺼짐(10 % 18 = 10 >= 9)
+    assert strip_lit(False, None, Motion.APPROACHING, 10) is False
+    # 경적이면 같은 상황에서도 항상 켜짐
+    assert strip_lit(True, None, Motion.APPROACHING, 10) is True
+
+
+def test_strip_lit_non_horn_follows_blink():
+    """비경적은 기존 blink 규칙(주기 18: 앞 절반 on)."""
+    from hud.card import strip_lit
+    from core.types import Motion
+    assert strip_lit(False, None, Motion.APPROACHING, 0) is True    # 0 < 9
+    assert strip_lit(False, None, Motion.STEADY, 999) is True       # 유지=상시
+
+
+def test_subline_horn_omits_motion():
+    """경적: 방향만, '접근/이동' 문구 없음."""
+    from hud.renderer import Renderer
+    from core.types import Direction
+    from hud.viewmodel import HudView
+    horn_left = HudView(
+        emergency=True, sound_text="경적", direction=Direction.LEFT,
+        direction_text="좌측", motion_text="접근 중", subtitle="",
+        confidence=0.8, is_horn=True,
+    )
+    assert Renderer._subline(horn_left) == "좌측"      # 방향만
+    horn_unknown = HudView(
+        emergency=True, sound_text="경적", direction=Direction.UNKNOWN,
+        direction_text="방향 미상", motion_text="접근 중", subtitle="",
+        confidence=0.8, is_horn=True,
+    )
+    assert Renderer._subline(horn_unknown) == ""        # 방향 미상이면 빈 문자열

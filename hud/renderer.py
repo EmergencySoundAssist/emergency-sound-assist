@@ -149,9 +149,11 @@ class Renderer:
 
     @staticmethod
     def _subline(view) -> str:
-        """헤더 서브라인: 방향 알면 '좌측에서 접근 중', 미상이면 상태만."""
-        if view.direction in (Direction.LEFT, Direction.RIGHT,
-                              Direction.FRONT, Direction.REAR):
+        """헤더 서브라인. 경적은 접근/이동을 출력하지 않고 방향만 보여준다."""
+        known = (Direction.LEFT, Direction.RIGHT, Direction.FRONT, Direction.REAR)
+        if getattr(view, "is_horn", False):
+            return view.direction_text if view.direction in known else ""
+        if view.direction in known:
             return f"{view.direction_text}에서 {view.motion_text}"
         return view.motion_text
 
