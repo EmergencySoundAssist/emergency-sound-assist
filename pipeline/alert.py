@@ -16,6 +16,8 @@ import unicodedata
 from collections import Counter, deque
 from dataclasses import dataclass
 
+from core.types import Motion
+
 CLASSES = ("siren", "horn", "noise")
 LABEL_KO = {"siren": "사이렌", "horn": "경적", "noise": ""}
 
@@ -298,6 +300,83 @@ class ConsoleSink:
     def close(self):
         if self.tty:
             sys.stdout.write("\r\033[K"); sys.stdout.flush()   # 잔여 상태줄 정리
+
+
+_DIR_KO_FULL = {"front": "전방", "rear": "후방", "left": "좌측", "right": "우측", "unknown": "미상"}
+_MOTION_KO = {Motion.APPROACHING: "접근 중", Motion.RECEDING: "멀어짐",
+              Motion.STEADY: "유지", Motion.UNKNOWN: "판단중"}
+
+
+class DashboardSink:
+    """제자리 갱신 대시보드 — 스크롤 대신 한 판이 실시간으로 바뀐다(보기 쉬움).
+    run_stream 이 매 tick update(ev, info)만 부른다. tty 아니면 조용(파이프 도배 방지).
+
+    긴급:  종류·차종·레벨 / 방향 / 움직임+빠르기 / 근접 게이지
+    평상시: 자막(STT)  ·  워밍업: 대기 중"""
+
+    _COL = {"CRITICAL": "\033[1;31m", "WARN": "\033[1;33m", "PRE": "\033[1;33m"}
+    _TOP = "━━━━━ 🚨 긴급음 감지 ━━━━━━━━━━━━━━━━━━"
+    _BOT = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    def __init__(self):
+        self.tty = sys.stdout.isatty()
+        self._lines = 0
+
+    def update(self, ev, info) -> None:
+        lines = self._render(ev, info)
+        if not self.tty:
+            return
+        buf = f"\033[{self._lines}A" if self._lines else ""
+        buf += "\n".join("\033[K" + ln for ln in lines) + "\n\033[J"
+        sys.stdout.write(buf)
+        sys.stdout.flush()
+        self._lines = len(lines)
+
+    def close(self) -> None:
+        if self.tty:
+            sys.stdout.write("\033[J")
+            sys.stdout.flush()
+
+    def _render(self, ev, info) -> list:
+        rst = "\033[0m" if self.tty else ""
+        if not info:                                   # 워밍업(버퍼 부족)
+            return [self._TOP, "  ⏳ 대기 중…", self._BOT]
+        if ev.kind == "none":                          # 평상시 — STT 자막
+            sp = info.get("speech")
+            if sp is not None and getattr(sp, "is_speech", False) and sp.text:
+                cap = f'  💬 자막  "{sp.text}"'
+            else:
+                cap = "  💬 자막  (음성 없음)"
+            return [self._TOP, "  🟢 평상시", cap, self._BOT]
+
+        # 긴급 (사이렌/경적)
+        icon = {"siren": "🚨 사이렌", "horn": "📢 경적"}.get(ev.kind, ev.label)
+        col = self._COL.get(ev.level, "") if self.tty else ""
+        sub = f"  {ev.subtype.split('(')[0]}" if ev.subtype else ""
+        head = f"  {col}{icon}{rst}{sub}   {col}[{ev.level}]{rst}"
+
+        d = info.get("direction")
+        if d is not None:
+            ang = f" ({info['angle']:.0f}°)" if info.get("angle") is not None else ""
+            dline = f"  방향   {_DIR_KO_FULL.get(d.value, d.value)}{ang}"
+        else:
+            dline = "  방향   미상 (ReSpeaker 6채널 필요)"
+
+        m = info.get("motion")
+        spd = info.get("speed_level")
+        spdtxt = f"   빠르기 {spd}/5" if (m is Motion.APPROACHING and spd) else ""
+        mline = f"  움직임  {_MOTION_KO.get(m, '판단중')}{spdtxt}"
+
+        g = info.get("gauge")
+        if g is not None:
+            k = max(0, min(10, round(g * 10)))
+            prox = info.get("proximity") or ""
+            mark = " ⚠" if prox == "최근접" else ""
+            gline = f"  근접   [{'█' * k}{'░' * (10 - k)}] {prox}{mark}"
+        else:
+            gline = "  근접   [░░░░░░░░░░]"
+
+        return [self._TOP, head, dline, mline, gline, self._BOT]
 
 
 class GpioSink:

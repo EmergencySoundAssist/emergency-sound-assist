@@ -50,11 +50,24 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
-def run_stream(chunks, stt_worker=None, dt: float = 0.15) -> None:
-    """하이브리드 루프: 상태기계 이벤트(영구 줄) + 실시간 상태줄 + 방향/자막 보조 줄."""
+def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console") -> None:
+    """하이브리드 루프. view="console": 상세 로그(영구 줄+상태줄). view="dashboard": 제자리 갱신 패널."""
     from pipeline import alert
 
     pipe = Pipeline(stt_worker=stt_worker, dt=dt)
+
+    if view == "dashboard":                          # 제자리 갱신 대시보드 (보기 쉬움)
+        dash = alert.DashboardSink()
+        try:
+            for chunk in chunks:
+                ev, info = pipe.process(chunk)
+                dash.update(ev, info)
+        finally:
+            dash.close()
+            if stt_worker is not None:
+                stt_worker.stop()
+        return
+
     sink = alert.make_sink("console")
     shown_dir = False                               # 경보당 방향 1회 표시 (튀는 도배 방지)
     try:
@@ -97,6 +110,8 @@ def main() -> None:
                          "GPU 없는 보드·노트북은 small 이하 권장 — medium 은 CPU 실시간 불가")
     ap.add_argument("--tick", type=float, default=0.15,
                     help="tick 간격(초). 기본 0.15 (석우 런타임과 동일 — 예비경보 ~1.8s)")
+    ap.add_argument("--view", choices=["console", "dashboard"], default="console",
+                    help="출력 형식: console(상세 로그) / dashboard(제자리 갱신 패널, 보기 쉬움)")
     args = ap.parse_args()
 
     stt_worker = None
@@ -114,15 +129,15 @@ def main() -> None:
     if args.demo:
         print(f"== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) · tick {args.tick}s ==")
         sig = _synth_passby()
-        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick)
+        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick, args.view)
     elif args.wav:
         print(f"== WAV: {args.wav} · tick {args.tick}s ==")
         sig = load_wav(args.wav)
-        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick)
+        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick, args.view)
     else:
         print(f"== MIC: 실시간 · tick {args.tick}s (Ctrl+C 종료) ==")
         run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels,
-                                        chunk_seconds=args.tick), stt_worker, args.tick)
+                                        chunk_seconds=args.tick), stt_worker, args.tick, args.view)
 
 
 if __name__ == "__main__":

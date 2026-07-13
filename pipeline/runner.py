@@ -91,6 +91,7 @@ class Pipeline:
         sub = risk = None
         dir_idx = None
         gauge = None
+        ap_motion = ap_speed = ap_prox = None         # 대시보드용 구조화 값
         pre = False
         if sg["active"]:                          # 우선순위: 확정 siren > 예비(PRE) > horn
             kind, margin, gate = "siren", res["m_siren"], sg
@@ -99,6 +100,7 @@ class Pipeline:
             risk = _approach_tier(ap.motion, ap.speed_level, ap.proximity)  # +상대 근접도
             dir_idx = _MOTION_DIR_IDX.get(ap.motion)    # 상태줄 '지금=' 즉시 표시용(접근/멀어짐만)
             gauge = ap.gauge                            # 연속 근접 게이지(0~1) — 막대 표시용
+            ap_motion, ap_speed, ap_prox = ap.motion, ap.speed_level, ap.proximity
             if self.g_siren.state == "ON":              # FALLING(꺼진 꼬리) 중엔 새 투표 없음
                 sp = clf.subtype_probs()
                 if sp is not None:
@@ -124,6 +126,7 @@ class Pipeline:
         ev = alert.build_event(kind, margin, gate, sub, risk, pre=pre)
         info = dict(m_siren=res["m_siren"], state=self.g_siren.state, level=ev.level,
                     risk=risk, dir_raw=dir_idx, gauge=gauge, direction=direction, angle=angle,
+                    motion=ap_motion, speed_level=ap_speed, proximity=ap_prox,
                     speech=speech, label=res["label"], conf=res["conf"])
         return ev, info
 
