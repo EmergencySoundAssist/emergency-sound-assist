@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from core.types import Direction, Motion
 
@@ -63,3 +63,52 @@ def segment_brightness(seg_index: int, center_index: int, radius: int = 2) -> fl
     if dist >= radius:
         return 0.0
     return 1.0 - (dist / radius)
+
+
+def _ellipsize(text: str, measure: Callable[[str], int], max_width: int) -> str:
+    """text 가 폭을 넘으면 뒤를 잘라 '…' 를 붙여 폭 안에 맞춘다."""
+    if measure(text) <= max_width:
+        return text
+    ell = "…"
+    s = text
+    while s and measure(s + ell) > max_width:
+        s = s[:-1]
+    return (s + ell) if s else ell
+
+
+def wrap_text(
+    text: str,
+    measure: Callable[[str], int],
+    max_width: int,
+    max_lines: int = 2,
+) -> List[str]:
+    """자막을 max_width(px) 에 맞춰 그리디 줄바꿈.
+
+    한글은 단어 공백이 불규칙하므로 글자 단위로 채운다(공백은 자연히 줄 끝에 남음).
+    max_lines 를 넘기면 마지막 줄을 '…' 로 절단한다. 빈 문자열 → [].
+    measure: 문자열 → 픽셀폭 (렌더러에선 font.size(s)[0]).
+    """
+    if not text:
+        return []
+    if max_width <= 0 or max_lines <= 0:
+        return [text]
+    lines: List[str] = []
+    cur = ""
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if cur == "" or measure(cur + ch) <= max_width:
+            cur += ch
+            i += 1
+        else:
+            # 현재 줄이 꽉 참. 마지막 허용 줄이면 남은 전체를 절단해 담고 종료.
+            if len(lines) == max_lines - 1:
+                return lines + [_ellipsize(text[i - len(cur):], measure, max_width)]
+            lines.append(cur)
+            cur = ""
+    if cur:
+        if len(lines) < max_lines:
+            lines.append(cur)
+        else:
+            lines[-1] = _ellipsize(lines[-1] + cur, measure, max_width)
+    return lines

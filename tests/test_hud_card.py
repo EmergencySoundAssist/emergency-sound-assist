@@ -147,3 +147,34 @@ def test_led_cluster_follows_direction():
     right_cx = lit_x_center(Direction.RIGHT)
     assert left_cx is not None and right_cx is not None
     assert left_cx < right_cx                          # 좌측 클러스터가 더 왼쪽
+
+
+# ── Task 1: wrap_text (자막 자동 줄바꿈) ──────────────────────────────────
+
+def test_wrap_text_single_line_when_short():
+    """폭에 맞으면 한 줄 그대로."""
+    from hud.card import wrap_text
+    lines = wrap_text("비켜", lambda s: len(s), max_width=10, max_lines=2)
+    assert lines == ["비켜"]
+
+
+def test_wrap_text_breaks_into_multiple_lines():
+    """폭 초과 시 글자 단위로 줄바꿈 (measure=글자수, 폭=3)."""
+    from hud.card import wrap_text
+    lines = wrap_text("가나다라마바", lambda s: len(s), max_width=3, max_lines=2)
+    assert lines == ["가나다", "라마바"]
+
+
+def test_wrap_text_ellipsizes_on_overflow():
+    """max_lines 초과분은 마지막 줄을 '…'로 절단."""
+    from hud.card import wrap_text
+    lines = wrap_text("가나다라마바사아", lambda s: len(s), max_width=3, max_lines=2)
+    assert len(lines) == 2
+    assert lines[0] == "가나다"
+    assert lines[1].endswith("…")
+    assert len(lines[1]) <= 3          # '…' 포함 폭 이내
+
+
+def test_wrap_text_empty_is_empty_list():
+    from hud.card import wrap_text
+    assert wrap_text("", lambda s: len(s), max_width=10) == []
