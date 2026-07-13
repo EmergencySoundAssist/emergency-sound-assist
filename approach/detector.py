@@ -25,6 +25,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from core.types import AudioChunk, ApproachResult, Motion, SAMPLE_RATE
@@ -45,8 +47,11 @@ CLOSE_DROP = 0.7        # log-파워 낙폭(≈3dB) — 이 이하면 '최근접
 FAR_RATIO = 2.0         # 최근접 대비 거리비 — 이 이상이면 '원거리'
 MIN_RISE = 1.5          # 이벤트 시작 대비 최고치가 이만큼(≈6.5dB) 커진 뒤에만 근접도 산출
                         # (먼 접근 초반 잡음 출렁임이 만드는 가짜 '최근접' 억제)
-GAUGE_SPAN = 3.0        # 연속 게이지 만점 기준 log-파워 상승폭(≈13dB) — 시작 대비 이만큼 커지면 MAX
-                        # (다가오면 차오르고 멀어지면 빠지는 막대. ⚠ 상대값 — 절대 거리 아님, 튜닝 대상)
+# 연속 게이지 만점 기준 log-파워 상승폭 — 시작 대비 이만큼 커지면 MAX.
+# 낮을수록 '더 멀리서/더 빨리' 찬다(민감), 높을수록 아주 가까워야 참.
+# 실행 중 튜닝: ESA_GAUGE_SPAN=1.0 python main.py ...  (환경변수로 기본값 덮어씀)
+# ⚠ 상대값 — 절대 거리(m) 아님, 실차 튜닝 대상.
+GAUGE_SPAN = float(os.environ.get("ESA_GAUGE_SPAN", "1.5"))   # 기본 1.5 (≈6.5dB)
 
 
 def _speed_level(eslope: float) -> int:
