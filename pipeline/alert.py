@@ -9,8 +9,10 @@ alert.py — 검출 tick → 안정 알림 상태기계 + 출력 싱크 (순수 
 """
 from __future__ import annotations
 
+import shutil
 import sys
 import time
+import unicodedata
 from collections import Counter, deque
 from dataclasses import dataclass
 
@@ -225,21 +227,41 @@ def _proximity_bar(gauge: float | None, dir_raw: int | None, n: int = 10) -> str
     return f"  근접[{bar}]{arrow}{mx}"
 
 
+def _dwidth(s: str) -> int:
+    """표시열 폭 — CJK(한글 등)는 2열로 센다."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+
+
+def _fit_cols(s: str) -> str:
+    """터미널 폭에 맞게 표시열 기준으로 자른다 — 줄바꿈·깨짐 방지(좁은 화면 대비)."""
+    maxc = shutil.get_terminal_size((100, 24)).columns - 1
+    if _dwidth(s) <= maxc:
+        return s
+    out, w = [], 0
+    for c in s:
+        cw = 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+        if w + cw > maxc:
+            break
+        out.append(c)
+        w += cw
+    return "".join(out)
+
+
 def _status_line(margin: float, state: str, level: str, risk: str | None = None,
                  dir_raw: int | None = None, gauge: float | None = None) -> str:
-    """연속 실시간 상태줄(제자리 갱신용). raw 마진 막대 + 안정 게이트 상태 + 근접 게이지.
+    """연속 실시간 상태줄(제자리 갱신용). raw 마진 막대 + 게이트 상태 + 근접 게이지 + 위험도.
     막대: 마진 -2(빈칸)~+10(꽉) 12칸, τ_on≈4칸 지점. raw라 매 tick 흔들림(=실시간).
-    dir_raw = 방향 헤드의 tick 즉시값(스무딩 전) — 표시만 즉시, 경보 tier는 스무딩 유지.
-    gauge = 음량 기반 연속 근접도(0~1) — 다가오면 차오르고 멀어지면 빠지는 막대."""
-    n = max(0, min(12, round((margin + 2.0) / 12.0 * 12)))
-    bar = "▓" * n + "░" * (12 - n)
+    gauge = 음량 기반 연속 근접도(0~1) — 다가오면 차오르고 멀어지면 빠지는 막대.
+    좁은 터미널에서 줄이 넘치면 _fit_cols 가 뒤(위험도 텍스트)부터 자른다 — 근접 게이지는 앞쪽이라 보존.
+    ('지금=' 은 게이지 화살표(↑/↓)·위험도 방향과 중복이라 제거)."""
+    n = max(0, min(8, round((margin + 2.0) / 12.0 * 8)))    # 검출 막대 8칸(좁은 화면 대비 축소)
+    bar = "▓" * n + "░" * (8 - n)
     st = {"OFF": "대기 ", "RISING": "↑감지", "ON": "●경보", "FALLING": "↓유지"}.get(state, state)
     active = state in ("ON", "FALLING")
     lv = f" {level}" if active else ""
-    r = f"  위험도={risk}" if (active and risk) else ""
-    d = f"  지금={DIR_KO[dir_raw]}" if (active and dir_raw is not None) else ""
-    g = _proximity_bar(gauge, dir_raw) if active else ""
-    return f"사이렌 [{bar}] {margin:+5.1f}  {st}{lv}{r}{d}{g}"
+    g = _proximity_bar(gauge, dir_raw) if active else ""   # 근접 게이지 — 우선 표시(앞쪽, 안 잘림)
+    r = f"  위험도={risk}" if (active and risk) else ""    # 좁으면 이 뒤부터 잘림
+    return _fit_cols(f"사이렌 [{bar}] {margin:+5.1f}  {st}{lv}{g}{r}")
 
 
 class ConsoleSink:
