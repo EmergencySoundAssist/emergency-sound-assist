@@ -178,3 +178,26 @@ def test_wrap_text_ellipsizes_on_overflow():
 def test_wrap_text_empty_is_empty_list():
     from hud.card import wrap_text
     assert wrap_text("", lambda s: len(s), max_width=10) == []
+
+
+# ── Task 2: dots_brightness (STT 변환 중 점 3개 애니메이션) ────────────────
+
+def test_dots_brightness_shape_and_range():
+    """점 3개, 밝기 0.2~1.0 범위."""
+    from hud.card import dots_brightness
+    bs = dots_brightness(0)
+    assert len(bs) == 3
+    assert all(0.2 <= b <= 1.0 for b in bs)
+
+
+def test_dots_brightness_animates():
+    """프레임에 따라 값이 변한다(정지 아님) — 한 주기 안에서 서로 다른 상태 존재."""
+    from hud.card import dots_brightness
+    states = {tuple(round(b, 3) for b in dots_brightness(f)) for f in range(24)}
+    assert len(states) > 1
+
+
+def test_dots_brightness_is_periodic():
+    """period 만큼 지나면 동일 상태로 되돌아온다."""
+    from hud.card import dots_brightness
+    assert dots_brightness(3) == dots_brightness(3 + 24)

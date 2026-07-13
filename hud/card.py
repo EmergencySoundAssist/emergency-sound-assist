@@ -112,3 +112,19 @@ def wrap_text(
         else:
             lines[-1] = _ellipsize(lines[-1] + cur, measure, max_width)
     return lines
+
+
+def dots_brightness(frame: int, count: int = 3, period: int = 24) -> List[float]:
+    """STT 변환 중 로딩 점 애니메이션의 각 점 밝기(0.2~1.0).
+
+    각 점을 period/count 만큼 위상차를 두고 삼각파(0→1→0)로 밝혔다 어둡힌다.
+    바닥 밝기 0.2 를 둬 점이 완전히 사라지지 않게 한다(렌더러는 이 밝기로
+    색·세로 오프셋을 만들어 '움직이는 점'을 그린다).
+    """
+    step = period / count
+    out: List[float] = []
+    for i in range(count):
+        t = ((frame - i * step) % period) / period      # 0~1 위상
+        tri = 1.0 - abs(2.0 * t - 1.0)                   # 0→1→0 삼각파
+        out.append(0.2 + 0.8 * tri)
+    return out
