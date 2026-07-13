@@ -121,6 +121,10 @@ class Motion(str, Enum):
 class ApproachResult:
     motion: Motion
     speed_level: Optional[int] = None    # 접근 빠르기 1~5 — 음량 기울기 크기 (접근 중일 때만)
+    # 상대 근접도 — 이벤트 내 '가장 컸던 순간(=최근접)' 대비 지금 위치. 절대 거리(m)가 아님.
+    proximity: Optional[str] = None      # "최근접" / "근거리" / "원거리" (접근 중·미상이면 None)
+    rel_distance: Optional[float] = None # 최근접 대비 거리비 (≥1.0, 1.0=가장 가까웠던 지점)
+    gauge: Optional[float] = None        # 연속 근접 게이지 0.0~1.0 — 다가오면 차오르고 멀어지면 빠짐
 
 
 # ---------------------------------------------------------------------------

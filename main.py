@@ -9,7 +9,7 @@ EmergencySoundAssist 실시간 메인 루프.
 하이브리드 런타임 (exp/hybrid-runtime — 석우 경보엔진 + 우리 방향/STT):
   검출  : 이중 창 (5s 확정 + 2s 예비 87f) · 로짓 마진 → alert 상태기계 (ONSET/REMIND/CLEAR)
   차종  : yt 실채널 파인튜닝판 + 6초 다수결 (사이렌 ON 중)
-  움직임: dir 헤드 (정지/접근/멀어짐) + SpeedTracker tier
+  움직임: 음량 기울기 (approach.detector — 접근/멀어짐/유지 + 빠르기) — 우리 것
   방향  : SRP-PHAT (ch1~4, 긴급 중) — 우리 것
   STT   : webrtcvad→Whisper 백그라운드 — 우리 것 (★1초 뭉치 feed)
   tick  : 0.15s 기본 (--tick)
@@ -72,7 +72,7 @@ def run_stream(chunks, stt_worker=None, dt: float = 0.15) -> None:
                 print(f"\r\033[K         ↳ 자막: \"{sp.text}\"", flush=True)
             if info:
                 sink.tick(info["m_siren"], info["state"], info["level"],
-                          info.get("risk"), info.get("dir_raw"))
+                          info.get("risk"), info.get("dir_raw"), info.get("gauge"))
     finally:
         sink.close()
         if stt_worker is not None:

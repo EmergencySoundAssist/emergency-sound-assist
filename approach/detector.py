@@ -37,6 +37,17 @@ _BAND = (300.0, 2500.0)
 # 합성 실측: 60km/h·측면 8m 원거리 접근 구간 기울기 ~0.8 → 3단계.
 SPEED_LEVEL_EDGES = (0.30, 0.60, 0.90, 1.30)
 
+# 상대 근접도 경계 — 이벤트 내 '최고 음량(=최근접)' 대비 지금 위치.
+# 물리: power ∝ 1/r² → log-파워 낙폭 Δ → 거리비 r/r_min = exp(Δ/2).
+#   낙폭 CLOSE_DROP(≈3dB) 이하 = 최근접 부근, 거리비 FAR_RATIO 이상 = 원거리.
+# ⚠ 절대 거리(m)가 아니라 '가장 가까웠던 순간 대비' 상대값. 경계는 튜닝 대상.
+CLOSE_DROP = 0.7        # log-파워 낙폭(≈3dB) — 이 이하면 '최근접'
+FAR_RATIO = 2.0         # 최근접 대비 거리비 — 이 이상이면 '원거리'
+MIN_RISE = 1.5          # 이벤트 시작 대비 최고치가 이만큼(≈6.5dB) 커진 뒤에만 근접도 산출
+                        # (먼 접근 초반 잡음 출렁임이 만드는 가짜 '최근접' 억제)
+GAUGE_SPAN = 3.0        # 연속 게이지 만점 기준 log-파워 상승폭(≈13dB) — 시작 대비 이만큼 커지면 MAX
+                        # (다가오면 차오르고 멀어지면 빠지는 막대. ⚠ 상대값 — 절대 거리 아님, 튜닝 대상)
+
 
 def _speed_level(eslope: float) -> int:
     """음량 기울기(log-파워/초) → 접근 빠르기 1~5단계."""
@@ -135,24 +146,30 @@ class ApproachDetector:
         self.min_span_seconds = min_span_seconds
         self._buf = np.zeros(0, dtype=np.float64)
         self._last = Motion.UNKNOWN
+        self._peak_loge = -np.inf          # 이벤트 내 최고 음량(=최근접 지점) 추적
+        self._start_loge = None            # 이벤트 시작 음량 (의미있는 접근 판단 기준)
 
     def reset(self) -> None:
         """새 이벤트 시작 시 상태 초기화."""
         self._buf = np.zeros(0, dtype=np.float64)
         self._last = Motion.UNKNOWN
+        self._peak_loge = -np.inf          # 근접도 기준(최고 음량)도 리셋
+        self._start_loge = None
 
     def update(self, chunk: AudioChunk) -> ApproachResult:
         x = _to_mono(chunk.samples)
         self._buf = np.concatenate([self._buf, x])[-self.maxlen:]
-        motion, level = self._decide()
+        motion, level, prox, rel, gauge = self._decide()
         self._last = motion
-        return ApproachResult(motion=motion, speed_level=level)
+        return ApproachResult(motion=motion, speed_level=level,
+                              proximity=prox, rel_distance=rel, gauge=gauge)
 
     # ------------------------------------------------------------------
     def _decide(self):
-        """→ (Motion, 접근 빠르기 1~5 | None).  빠르기는 접근일 때만 (음량 기울기 크기)."""
+        """→ (Motion, 빠르기 1~5|None, 근접도|None, 거리비|None).
+        빠르기는 접근일 때만(기울기 크기), 근접도는 최근접 이후(peak 대비)."""
         if self._buf.size < self.frame:
-            return Motion.UNKNOWN, None
+            return Motion.UNKNOWN, None, None, None, None
 
         ts, fs, es = [], [], []
         for start in range(0, self._buf.size - self.frame + 1, self.hop):
@@ -167,9 +184,9 @@ class ApproachDetector:
 
         tone = ~np.isnan(fs)                      # 사이렌 톤이 잡힌 프레임
         if tone.sum() < self.min_valid_frames:
-            return Motion.UNKNOWN, None            # 톤 관측 부족 (비사이렌/무음)
+            return Motion.UNKNOWN, None, None, None, None  # 톤 관측 부족 (비사이렌/무음)
         if np.ptp(ts[tone]) < self.min_span_seconds:
-            return Motion.UNKNOWN, None            # 관측 시간 부족 (아직 추세 불명)
+            return Motion.UNKNOWN, None, None, None, None  # 관측 시간 부족 (아직 추세 불명)
 
         # 주 신호: log-에너지 추세(부호가 통과점에서 뒤집힘)
         e_ok = np.isfinite(es)
@@ -191,7 +208,34 @@ class ApproachDetector:
         if motion is Motion.STEADY and fslope < -self.glide_threshold:
             motion = Motion.STEADY  # 전이 구간 — 명시적으로 유지 (부호 단정 회피)
 
-        return motion, level
+        cur_loge = float(es[e_ok][-1]) if e_ok.any() else None
+        prox, rel, gauge = self._proximity(motion, cur_loge)
+        return motion, level, prox, rel, gauge
+
+    def _proximity(self, motion, cur_loge):
+        """이벤트 내 최고 음량(=최근접) 대비 현재 → (근접도 라벨, 거리비, 연속 게이지).
+        물리: power∝1/r² → log-파워 낙폭 Δ → r/r_min = exp(Δ/2). 접근 전/미상이면 라벨 None.
+        게이지(0~1)는 시작 대비 현재 음량 — 접근 중에도 계속 차오른다.
+        ⚠ 절대 거리(m)가 아님 — '가장 가까웠던 순간 대비' 상대값."""
+        if cur_loge is None or motion is Motion.UNKNOWN:
+            return None, None, None
+        if self._start_loge is None:                # 이벤트 첫 유효 음량 = 접근 기준선
+            self._start_loge = cur_loge
+        rising = cur_loge > self._peak_loge
+        if rising:                                  # 아직 최고치 갱신 중 = 계속 다가오는 중
+            self._peak_loge = cur_loge
+        # 연속 게이지: 시작 대비 음량 상승 → 다가오면 차오르고 멀어지면 빠짐 (접근 중에도 유효)
+        gauge = float(np.clip((cur_loge - self._start_loge) / GAUGE_SPAN, 0.0, 1.0))
+        if rising:
+            return None, None, gauge                # 다가오는 중 — 라벨 보류(peak 미확정), 게이지만
+        if self._peak_loge - self._start_loge < MIN_RISE:
+            return None, None, gauge                # 아직 의미있는 접근 없음 → 가짜 최근접 억제
+        # 음량이 더는 안 오름 = 최고치(최근접)를 지났다 (motion 라벨의 3초 지연과 무관하게 즉시 포착)
+        drop = self._peak_loge - cur_loge           # ≥ 0 (지금이 최고면 0)
+        if drop < CLOSE_DROP:
+            return "최근접", 1.0, gauge
+        ratio = float(np.exp(drop / 2.0))           # power∝1/r² → 최근접 대비 거리비
+        return ("근거리" if ratio < FAR_RATIO else "원거리"), ratio, gauge
 
 
 if __name__ == "__main__":  # 빠른 스모크 (무음 → UNKNOWN)

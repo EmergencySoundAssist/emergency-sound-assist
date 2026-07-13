@@ -213,11 +213,24 @@ def build_event(kind: str, margin: float, gate: dict | None, subtype: str | None
 
 
 # ── 출력 싱크 ──────────────────────────────────────────────────────────────
+def _proximity_bar(gauge: float | None, dir_raw: int | None, n: int = 10) -> str:
+    """연속 근접 게이지(0~1) → '근접[████░░░░]↑' 막대. 다가오면 차오르고 멀어지면 빠짐.
+    화살표: dir_raw 1=접근(↑)/2=멀어짐(↓). 꽉 차면(최근접) MAX⚠. gauge None이면 빈 문자열."""
+    if gauge is None:
+        return ""
+    k = max(0, min(n, round(gauge * n)))
+    bar = "█" * k + "░" * (n - k)
+    arrow = {1: "↑", 2: "↓"}.get(dir_raw, " ")
+    mx = " MAX⚠" if k >= n else ""
+    return f"  근접[{bar}]{arrow}{mx}"
+
+
 def _status_line(margin: float, state: str, level: str, risk: str | None = None,
-                 dir_raw: int | None = None) -> str:
-    """연속 실시간 상태줄(제자리 갱신용). raw 마진 막대 + 안정 게이트 상태.
+                 dir_raw: int | None = None, gauge: float | None = None) -> str:
+    """연속 실시간 상태줄(제자리 갱신용). raw 마진 막대 + 안정 게이트 상태 + 근접 게이지.
     막대: 마진 -2(빈칸)~+10(꽉) 12칸, τ_on≈4칸 지점. raw라 매 tick 흔들림(=실시간).
-    dir_raw = 방향 헤드의 tick 즉시값(스무딩 전) — 표시만 즉시, 경보 tier는 스무딩 유지."""
+    dir_raw = 방향 헤드의 tick 즉시값(스무딩 전) — 표시만 즉시, 경보 tier는 스무딩 유지.
+    gauge = 음량 기반 연속 근접도(0~1) — 다가오면 차오르고 멀어지면 빠지는 막대."""
     n = max(0, min(12, round((margin + 2.0) / 12.0 * 12)))
     bar = "▓" * n + "░" * (12 - n)
     st = {"OFF": "대기 ", "RISING": "↑감지", "ON": "●경보", "FALLING": "↓유지"}.get(state, state)
@@ -225,7 +238,8 @@ def _status_line(margin: float, state: str, level: str, risk: str | None = None,
     lv = f" {level}" if active else ""
     r = f"  위험도={risk}" if (active and risk) else ""
     d = f"  지금={DIR_KO[dir_raw]}" if (active and dir_raw is not None) else ""
-    return f"사이렌 [{bar}] {margin:+5.1f}  {st}{lv}{r}{d}"
+    g = _proximity_bar(gauge, dir_raw) if active else ""
+    return f"사이렌 [{bar}] {margin:+5.1f}  {st}{lv}{r}{d}{g}"
 
 
 class ConsoleSink:
@@ -249,13 +263,14 @@ class ConsoleSink:
         print(("\r\033[K" if self.tty else "") + msg, flush=True)
 
     def tick(self, margin: float, state: str, level: str, risk: str | None = None,
-             dir_raw: int | None = None) -> None:
+             dir_raw: int | None = None, gauge: float | None = None) -> None:
         """매 tick 연속 상태줄을 제자리 갱신 — 실시간 피드백. tty 아니면 생략(파이프 도배 방지)."""
         if not self.tty:
             return
         active = state in ("ON", "FALLING")
         col = self._COLOR.get(level if active else "NONE", "")
-        sys.stdout.write("\r\033[K" + col + _status_line(margin, state, level, risk, dir_raw) + "\033[0m")
+        sys.stdout.write("\r\033[K" + col
+                         + _status_line(margin, state, level, risk, dir_raw, gauge) + "\033[0m")
         sys.stdout.flush()
 
     def close(self):
