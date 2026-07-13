@@ -121,31 +121,42 @@ class Renderer:
         pygame.draw.rect(surface, color, (m, line_y, int(w * 0.094), 3))
         self._text(surface, self._subline(view), self._f_line, color, m, line_y + 10)
 
-        # 중앙: 글로우 LED 스트립
+        # 중앙: 글로우 LED 스트립 (경적은 상시 점등 — 접근 깜빡임 없음)
+        center = hud_card.direction_to_index(view.angle_deg, view.direction, n=15)
+        lit = hud_card.strip_lit(
+            getattr(view, "is_horn", False),
+            view.speed_level, view.approach_motion(), self._frame,
+        )
+        self._draw_direction_strip(surface, w, h, h // 2, color, center, lit)
+
+        # 하단: 구분선 + 자막(있을 때만, 자동 줄바꿈)
+        if view.subtitle:
+            pygame.draw.rect(surface, DIM, (m, h - int(h * 0.18), w - 2 * m, 2))
+            lines = hud_card.wrap_text(
+                view.subtitle, lambda s: self._f_cap.size(s)[0],
+                w - 2 * m, max_lines=2,
+            )
+            self._center_multiline(surface, lines, self._f_cap, FG, w // 2, h - int(h * 0.1))
+
+    def _draw_direction_strip(self, surface, w, h, y, color, center, lit):
+        """15-세그먼트 방향 LED 스트립 + L/R 라벨을 행 y 에 그린다.
+
+        center: 점등 중심 세그먼트 인덱스. lit=False 면 전체 소등(꺼진 세그먼트만).
+        긴급/평상시(idle) 화면이 공유한다.
+        """
         n = 15
-        center = hud_card.direction_to_index(view.angle_deg, view.direction, n=n)
-        _, period = hud_card.blink_spec(view.speed_level, view.approach_motion())
-        lit = hud_card.is_lit_now(period, self._frame)
         seg_w = int(w * 0.042)
         gap = int(seg_w * 0.26)
         total = n * seg_w + (n - 1) * gap
         x0 = (w - total) // 2
-        y = h // 2
         seg_h = int(h * 0.064)
         for i in range(n):
             b = hud_card.segment_brightness(i, center, radius=3) if lit else 0.0
             _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, seg_h, color, b)
-
-        # 좌우 라벨
         ll = self._f_tag.render("L", True, MUTED)
         surface.blit(ll, (x0 - ll.get_width() - 18, y + seg_h // 2 - ll.get_height() // 2))
         rl = self._f_tag.render("R", True, MUTED)
         surface.blit(rl, (x0 + total + 18, y + seg_h // 2 - rl.get_height() // 2))
-
-        # 하단: 구분선 + 자막(있을 때만)
-        if view.subtitle:
-            pygame.draw.rect(surface, DIM, (m, h - int(h * 0.18), w - 2 * m, 2))
-            self._center(surface, view.subtitle, self._f_cap, FG, w // 2, h - int(h * 0.1))
 
     @staticmethod
     def _subline(view) -> str:
@@ -158,12 +169,25 @@ class Renderer:
         return view.motion_text
 
     def _draw_normal(self, surface, view, w, h):
+        self._frame = (self._frame + 1) % 100000
         self._text(surface, view.sound_text, self._f_mid, MUTED, 24, 24)
+
+        # 방향 바(idle) — STT 모드에서도 항상 표시(중립색, 중앙, 깜빡임 없음)
+        center = hud_card.direction_to_index(None, Direction.UNKNOWN, n=15)
+        self._draw_direction_strip(surface, w, h, int(h * 0.42), MUTED, center, True)
+
+        # 하단 밴드: 자막(자동 줄바꿈) 또는 변환 중 점 애니메이션
         band_h = h // 3
         pygame.draw.rect(surface, PANEL, pygame.Rect(0, h - band_h, w, band_h))
-        text = view.subtitle if view.subtitle else "…"
-        color = FG if view.subtitle else MUTED
-        self._center(surface, text, self._f_sub, color, w // 2, h - band_h // 2)
+        cy = h - band_h // 2
+        if view.subtitle:
+            lines = hud_card.wrap_text(
+                view.subtitle, lambda s: self._f_sub.size(s)[0],
+                int(w * 0.9), max_lines=2,
+            )
+            self._center_multiline(surface, lines, self._f_sub, FG, w // 2, cy)
+        else:
+            self._draw_dots(surface, w // 2, cy)
 
     def _draw_radar(self, surface, rect, active):
         pygame.draw.rect(surface, DIM, rect, width=2, border_radius=12)
@@ -190,3 +214,24 @@ class Renderer:
     def _center(self, surface, s, font, color, cx, cy):
         surf = font.render(s, True, color)
         surface.blit(surf, surf.get_rect(center=(cx, cy)))
+
+    def _center_multiline(self, surface, lines, font, color, cx, cy):
+        """여러 줄을 (cx, cy) 세로 중앙 기준으로 쌓아 그린다."""
+        if not lines:
+            return
+        lh = font.get_height()
+        y = cy - (lh * len(lines)) // 2
+        for ln in lines:
+            surf = font.render(ln, True, color)
+            surface.blit(surf, surf.get_rect(center=(cx, y + lh // 2)))
+            y += lh
+
+    def _draw_dots(self, surface, cx, cy):
+        """STT 변환 중 로딩 점 3개 — 밝기 웨이브 + 살짝 위로 튀는 움직임."""
+        bs = hud_card.dots_brightness(self._frame)
+        r, gap = max(5, self._f_sub.get_height() // 6), 34
+        x0 = cx - gap
+        for i, b in enumerate(bs):
+            col = tuple(int(c * (0.3 + 0.7 * b)) for c in FG)
+            y = cy - int(b * 8)                       # 밝을수록 위로(움직임)
+            pygame.draw.circle(surface, col, (x0 + i * gap, y), r)

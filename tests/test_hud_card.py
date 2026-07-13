@@ -240,3 +240,77 @@ def test_subline_horn_omits_motion():
         confidence=0.8, is_horn=True,
     )
     assert Renderer._subline(horn_unknown) == ""        # 방향 미상이면 빈 문자열
+
+
+# ── Task 4: 렌더러 통합 (STT 방향 바 / 점 애니메이션 / 멀티라인 자막) ──────
+
+def _normal_view_card(subtitle=""):
+    from hud.viewmodel import HudView
+    from core.types import Direction, Motion
+    return HudView(
+        emergency=False, sound_text="일반 도로 소음", direction=Direction.UNKNOWN,
+        direction_text="방향 미상", motion_text="이동 미상", subtitle=subtitle,
+        confidence=0.3, motion=Motion.UNKNOWN,
+    )
+
+
+def test_normal_mode_draws_idle_direction_strip():
+    """평상시(STT) 화면에도 방향 바가 그려진다 — 스트립 행에 픽셀이 존재."""
+    import pygame
+    r, surf = _renderer_and_surface()               # 1280x720
+    r._draw_normal(surf, _normal_view_card(), 1280, 720)
+    arr = pygame.surfarray.array3d(surf)            # (w, h, 3)
+    y = int(720 * 0.42)
+    strip_band = arr[:, y - 15:y + 55, :]
+    assert strip_band.sum() > 0                     # idle 바가 그려짐
+
+
+def test_normal_mode_dots_animate_over_frames():
+    """자막이 없으면 점 애니메이션 — 프레임이 진행되며 렌더가 달라진다."""
+    import pygame
+    r, surf = _renderer_and_surface()
+    frames = []
+    for _ in range(6):
+        surf.fill((0, 0, 0))
+        r._draw_normal(surf, _normal_view_card(), 1280, 720)
+        band = pygame.surfarray.array3d(surf)[:, 720 - 720 // 3:, :]  # 하단 밴드
+        frames.append(int(band.sum()))
+    assert len(set(frames)) > 1                     # 애니메이션(정지 아님)
+
+
+def test_normal_mode_long_subtitle_wraps_without_crash():
+    """긴 자막이 여러 줄로 렌더된다(크래시 없음)."""
+    import pygame
+    r, surf = _renderer_and_surface()
+    long_text = "앞차가 급정거했으니 차간 거리를 충분히 확보하고 서행하세요 다시 한 번 안내드립니다"
+    r._draw_normal(surf, _normal_view_card(subtitle=long_text), 1280, 720)
+    assert pygame.surfarray.array3d(surf).sum() > 0
+
+
+def test_emergency_horn_strip_never_dark():
+    """경적: 스트립이 매 프레임 '점등'(차종색) 상태 — 접근 깜빡임으로 소등되지 않음.
+
+    깜빡임 OFF 세그먼트는 DIM(회색)으로 그려지므로, 단순 픽셀 유무가 아니라
+    '차종색(주황) 점등 세그먼트'가 매 프레임 존재하는지로 확인한다.
+    """
+    import numpy as np
+    import pygame
+    from hud.viewmodel import HudView
+    from hud.renderer import VEH_OTHER
+    from core.types import Direction, Motion
+    r, surf = _renderer_and_surface()
+    horn = HudView(
+        emergency=True, sound_text="경적", direction=Direction.LEFT,
+        direction_text="좌측", motion_text="접근 중", subtitle="",
+        confidence=0.8, motion=Motion.APPROACHING, is_horn=True,
+    )
+    target = np.array(VEH_OTHER)
+    lit_counts = []
+    for _ in range(20):                             # 한 blink 주기(18) 이상
+        surf.fill((0, 0, 0))
+        r._draw_emergency(surf, horn, 1280, 720)
+        # 스트립 행(중앙 y=h//2)만 검사 — 헤더의 주황 강조선/서브라인 제외
+        band = pygame.surfarray.array3d(surf).astype(int)[:, 355:410, :]
+        lit = (np.abs(band - target).sum(axis=2) < 80)   # 차종색 점등 세그먼트
+        lit_counts.append(int(lit.sum()))
+    assert all(c > 0 for c in lit_counts)           # 어떤 프레임에도 소등 안 됨
