@@ -145,3 +145,25 @@ def strip_lit(
         return True
     _, period = blink_spec(speed_level, motion)
     return is_lit_now(period, frame)
+
+
+def azimuth_to_bar_index(raw_deg: float, n: int = 15) -> Optional[int]:
+    """raw DoA 방위각 → 가로 바 인덱스(0=좌 ~ n-1=우). 전방이면 None(숨김).
+
+    estimator 의 차량 보정(_to_vehicle_angle)을 재사용해 raw(0~359, 보드 기준)를
+    차량 기준(전0/우90/후180/좌270)으로 바꾼 뒤 가로 위치로 편다:
+      우(90°)→오른쪽 끝, 후(180°)→중앙, 좌(270°)→왼쪽 끝.
+    전방(315~360° 및 0~45°)은 운전자가 직접 보는 방향이라 바를 숨긴다(None).
+    """
+    from doa.estimator import _to_vehicle_angle    # 케이블=후방 보정 재사용(DRY)
+    veh = _to_vehicle_angle(raw_deg)               # 0=전 90=우 180=후 270=좌
+    if veh >= 315.0 or veh < 45.0:
+        return None                                # 전방 → 숨김
+    frac = (270.0 - veh) / 180.0                   # 우90→1.0, 후180→0.5, 좌270→0.0
+    frac = max(0.0, min(1.0, frac))
+    return int(round(frac * (n - 1)))
+
+
+def direction_visible(direction: Direction) -> bool:
+    """긴급 화면에서 이 방향의 바를 표시할지(각도가 없을 때의 이산 폴백). 전방만 숨긴다."""
+    return direction is not Direction.FRONT

@@ -314,3 +314,29 @@ def test_emergency_horn_strip_never_dark():
         lit = (np.abs(band - target).sum(axis=2) < 80)   # 차종색 점등 세그먼트
         lit_counts.append(int(lit.sum()))
     assert all(c > 0 for c in lit_counts)           # 어떤 프레임에도 소등 안 됨
+
+
+# ── Task: 방향 바 각도 매핑 (azimuth_to_bar_index / direction_visible) ──────
+
+def test_azimuth_bar_hides_front():
+    """raw 90° → 차량 전방(0°) → 숨김(None)."""
+    from hud.card import azimuth_to_bar_index
+    assert azimuth_to_bar_index(90) is None
+
+
+def test_azimuth_bar_left_center_right():
+    """차량 우→오른쪽끝, 후→중앙, 좌→왼쪽끝 (config: REAR_RAW_DEG=270, MIRROR=True)."""
+    from hud.card import azimuth_to_bar_index
+    assert azimuth_to_bar_index(0) == 14     # raw0 → 차량 우(90°)
+    assert azimuth_to_bar_index(270) == 7    # raw270 → 차량 후(180°)
+    assert azimuth_to_bar_index(180) == 0    # raw180 → 차량 좌(270°)
+
+
+def test_direction_visible_hides_front_only():
+    from hud.card import direction_visible
+    from core.types import Direction
+    assert direction_visible(Direction.FRONT) is False
+    assert direction_visible(Direction.LEFT) is True
+    assert direction_visible(Direction.REAR) is True
+    assert direction_visible(Direction.RIGHT) is True
+    assert direction_visible(Direction.UNKNOWN) is True
