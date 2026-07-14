@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 import numpy as np
@@ -40,6 +41,7 @@ from core.types import (
 from classifier import infer as classify
 from doa.estimator import estimate_direction
 from approach.detector import ApproachDetector
+from pipeline.caption_gate import CaptionGate
 
 
 class Pipeline:
@@ -49,10 +51,17 @@ class Pipeline:
                 feed/reset/latest 인터페이스만 쓰므로 비동기 워커가 메인을 막지 않는다.
     """
 
-    def __init__(self, stt_worker: Optional["object"] = None) -> None:
+    def __init__(
+        self,
+        stt_worker: Optional["object"] = None,
+        hold_seconds: float = 3.0,
+        clock=None,
+    ) -> None:
         self._approach = ApproachDetector()
         self._active = False
         self._stt = stt_worker           # 평상시 음성→자막 (백그라운드, 없으면 STT 생략)
+        self._caption = CaptionGate(hold_seconds)   # 자막 3초 유지 + 표시 중 입력 차단
+        self._now = clock if clock is not None else time.monotonic
 
     def process(self, chunk: AudioChunk) -> FusedResult:
         mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
@@ -65,6 +74,7 @@ class Pipeline:
             approach = self._approach.update(mono_chunk)
             if self._stt is not None:
                 self._stt.reset()                # 긴급 진입 → 발화 버퍼 비움(즉시 반환)
+                self._caption.reset()            # 유지 중이던 자막도 즉시 제거
         else:                                    # ── 평상시: STT 워커로 자막 ──
             if self._active:                     # 긴급음 종료 → 접근 추세 상태 초기화
                 self._approach.reset()
@@ -72,8 +82,8 @@ class Pipeline:
             direction = DirectionResult(direction=Direction.UNKNOWN)
             approach = ApproachResult(motion=Motion.UNKNOWN)
             if self._stt is not None:
-                self._stt.feed(mono_chunk)       # 워커에 전달(블로킹 X)
-                speech = self._stt.latest()      # 뒤에서 완성된 자막 있으면 실어 보냄
+                # 자막 3초 유지 + 표시 중 STT 입력 차단은 CaptionGate 가 담당
+                speech = self._caption.update(self._stt, mono_chunk, self._now())
 
         return FusedResult(sound=cls, direction=direction, approach=approach, speech=speech)
 
