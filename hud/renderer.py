@@ -121,13 +121,19 @@ class Renderer:
         pygame.draw.rect(surface, color, (m, line_y, int(w * 0.094), 3))
         self._text(surface, self._subline(view), self._f_line, color, m, line_y + 10)
 
-        # 중앙: 글로우 LED 스트립 (경적은 상시 점등 — 접근 깜빡임 없음)
-        center = hud_card.direction_to_index(view.angle_deg, view.direction, n=15)
-        lit = hud_card.strip_lit(
-            getattr(view, "is_horn", False),
-            view.speed_level, view.approach_motion(), self._frame,
-        )
-        self._draw_direction_strip(surface, w, h, h // 2, color, center, lit)
+        # 중앙: 방향 LED 스트립 — 각도(azimuth) 실시간 구동. 전방이면 바 자체를 숨긴다.
+        if view.angle_deg is not None:
+            idx = hud_card.azimuth_to_bar_index(view.angle_deg, n=15)
+            show_dir, center = (idx is not None), (idx if idx is not None else 7)
+        else:                                      # 각도 없음 → 이산 방향 폴백
+            show_dir = hud_card.direction_visible(view.direction)
+            center = hud_card.direction_to_index(None, view.direction, n=15)
+        if show_dir:
+            lit = hud_card.strip_lit(
+                getattr(view, "is_horn", False),
+                view.speed_level, view.approach_motion(), self._frame,
+            )
+            self._draw_direction_strip(surface, w, h, h // 2, color, center, lit)
 
         # 하단: 구분선 + 자막(있을 때만, 자동 줄바꿈)
         if view.subtitle:

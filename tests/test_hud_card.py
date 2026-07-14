@@ -340,3 +340,47 @@ def test_direction_visible_hides_front_only():
     assert direction_visible(Direction.REAR) is True
     assert direction_visible(Direction.RIGHT) is True
     assert direction_visible(Direction.UNKNOWN) is True
+
+
+def test_emergency_front_hides_bar():
+    """전방(각도) → 방향 바 미표시: 스트립 행에 차종색 세그먼트가 없다."""
+    import numpy as np
+    import pygame
+    from hud.viewmodel import HudView
+    from hud.renderer import VEH_AMBULANCE
+    from core.types import Direction, Motion
+    r, surf = _renderer_and_surface()
+    surf.fill((0, 0, 0))
+    front = HudView(emergency=True, sound_text="구급차", direction=Direction.FRONT,
+                    direction_text="전방", motion_text="접근 중", subtitle="",
+                    confidence=0.9, angle_deg=90.0, motion=Motion.APPROACHING)  # raw90→차량 전방
+    r._draw_emergency(surf, front, 1280, 720)
+    band = pygame.surfarray.array3d(surf).astype(int)[:, 340:420, :]   # 스트립 행만
+    lit = (np.abs(band - np.array(VEH_AMBULANCE)).sum(axis=2) < 80)
+    assert lit.sum() == 0                                              # 바 숨김
+
+
+def test_emergency_angle_positions_bar_left_vs_right():
+    """각도에 따라 점등 클러스터가 좌/우로 이동(실시간 각도 구동)."""
+    import numpy as np
+    import pygame
+    from hud.viewmodel import HudView
+    from hud.renderer import VEH_AMBULANCE
+    from core.types import Direction, Motion
+
+    def cluster_cx(raw):
+        r, surf = _renderer_and_surface()
+        surf.fill((0, 0, 0))
+        v = HudView(emergency=True, sound_text="구급차", direction=Direction.LEFT,
+                    direction_text="좌측", motion_text="접근 중", subtitle="",
+                    confidence=0.9, angle_deg=raw, motion=Motion.APPROACHING)
+        r._draw_emergency(surf, v, 1280, 720)
+        arr = pygame.surfarray.array3d(surf)[:, 340:420, :]           # 스트립 행만
+        mask = (np.abs(arr.astype(int) - np.array(VEH_AMBULANCE)).sum(axis=2) < 60)
+        xs = np.where(mask.any(axis=1))[0]
+        return xs.mean() if xs.size else None
+
+    left_cx = cluster_cx(180)     # raw180 → 차량 좌 → 왼쪽
+    right_cx = cluster_cx(0)      # raw0   → 차량 우 → 오른쪽
+    assert left_cx is not None and right_cx is not None
+    assert left_cx < right_cx
