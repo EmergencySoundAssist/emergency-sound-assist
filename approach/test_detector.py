@@ -78,13 +78,16 @@ def test_speed_level_edges():
     assert _speed_level(9.9) == 5           # 클램프
 
 
-def test_update_carries_speed_level_field():
-    """update() 가 ApproachResult.speed_level 을 채운다(무음이면 None)."""
+def test_update_carries_speed_and_proximity_fields():
+    """update() 가 speed_level·proximity·rel_distance·gauge 를 채운다(무음이면 None)."""
     from core.types import ApproachResult
     det = ApproachDetector()
     r = det.update(AudioChunk(samples=np.zeros(SAMPLE_RATE, dtype=np.float32)))
     assert isinstance(r, ApproachResult)
     assert r.speed_level is None           # 무음 → 접근 아님 → None
+    assert r.proximity is None
+    assert r.rel_distance is None
+    assert r.gauge is None
 
 
 if __name__ == "__main__":

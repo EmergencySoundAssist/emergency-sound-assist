@@ -140,7 +140,7 @@ class Renderer:
             show_dir = hud_card.direction_visible(view.direction)
             center = hud_card.direction_to_index(None, view.direction, n=15)
         if show_dir:
-            radius = hud_card.spread_for_speed(view.speed_level)   # 접근 빠를수록 넓게
+            radius = hud_card.spread_for_gauge(getattr(view, "gauge", None))  # 가까울수록 넓게
             ripple = hud_card.should_ripple(getattr(view, "is_horn", False),
                                             view.approach_motion())
             self._draw_direction_strip(surface, w, h, h // 2, color, center,

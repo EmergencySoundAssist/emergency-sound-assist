@@ -172,16 +172,13 @@ def direction_visible(direction: Direction) -> bool:
 # ── 접근 빠르기(speed_level) → 퍼짐 반경 · 퍼지는 깜빡임(ripple) ─────────────
 RIPPLE_PERIOD = 16          # 퍼짐 깜빡임 한 주기 프레임 수(@30fps). 디자인 확정값.
 
-# speed_level 1~5 → 점등 클러스터 반경(세그먼트). 빠를수록 넓게 = "가까워지는 느낌".
-# 접근 중이 아니면 speed_level=None → 기본 반경 3. (디자인 스튜디오에서 확정한 매핑)
-_SPEED_SPREAD = {1: 2, 2: 3, 3: 4, 4: 5, 5: 6}
-
-
-def spread_for_speed(speed_level: Optional[int]) -> int:
-    """접근 빠르기(1~5) → 퍼짐 반경. None(접근 아님)이면 기본 3."""
-    if speed_level is None:
+# 근접도 게이지(0~1) → 점등 클러스터 반경. 가까울수록 넓게 = "거리에 따라 범위가 넓어짐".
+# 게이지 없음(접근 아님/미상/경적)이면 기본 반경 3.
+def spread_for_gauge(gauge: Optional[float]) -> int:
+    """근접 게이지(0.0~1.0) → 퍼짐 반경 2~6. None 이면 기본 3."""
+    if gauge is None:
         return 3
-    return _SPEED_SPREAD.get(max(1, min(5, speed_level)), 3)
+    return int(round(2 + max(0.0, min(1.0, gauge)) * 4))    # 0→2(멀리) … 1→6(최근접)
 
 
 def should_ripple(is_horn: bool, motion: Motion) -> bool:

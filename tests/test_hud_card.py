@@ -344,13 +344,13 @@ def test_direction_visible_hides_front_only():
 
 # ── 접근 빠르기 → 퍼짐 반경 / 퍼지는 깜빡임 ───────────────────────────────
 
-def test_spread_for_speed_widens_with_speed():
-    from hud.card import spread_for_speed
-    assert spread_for_speed(None) == 3        # 접근 아님 → 기본
-    assert spread_for_speed(1) == 2           # 느린 접근 → 좁게
-    assert spread_for_speed(5) == 6           # 빠른 접근 → 넓게
-    assert spread_for_speed(1) < spread_for_speed(5)
-    assert spread_for_speed(99) == 6          # 범위 밖 클램프
+def test_spread_for_gauge_widens_when_closer():
+    from hud.card import spread_for_gauge
+    assert spread_for_gauge(None) == 3        # 게이지 없음 → 기본
+    assert spread_for_gauge(0.0) == 2         # 멀리 → 좁게
+    assert spread_for_gauge(1.0) == 6         # 최근접 → 넓게
+    assert spread_for_gauge(0.0) < spread_for_gauge(1.0)
+    assert spread_for_gauge(2.0) == 6         # 범위 밖 클램프
 
 
 def test_should_ripple_only_when_approaching_and_not_horn():
