@@ -167,3 +167,36 @@ def azimuth_to_bar_index(raw_deg: float, n: int = 15) -> Optional[int]:
 def direction_visible(direction: Direction) -> bool:
     """긴급 화면에서 이 방향의 바를 표시할지(각도가 없을 때의 이산 폴백). 전방만 숨긴다."""
     return direction is not Direction.FRONT
+
+
+# ── 접근 빠르기(speed_level) → 퍼짐 반경 · 퍼지는 깜빡임(ripple) ─────────────
+RIPPLE_PERIOD = 16          # 퍼짐 깜빡임 한 주기 프레임 수(@30fps). 디자인 확정값.
+
+# speed_level 1~5 → 점등 클러스터 반경(세그먼트). 빠를수록 넓게 = "가까워지는 느낌".
+# 접근 중이 아니면 speed_level=None → 기본 반경 3. (디자인 스튜디오에서 확정한 매핑)
+_SPEED_SPREAD = {1: 2, 2: 3, 3: 4, 4: 5, 5: 6}
+
+
+def spread_for_speed(speed_level: Optional[int]) -> int:
+    """접근 빠르기(1~5) → 퍼짐 반경. None(접근 아님)이면 기본 3."""
+    if speed_level is None:
+        return 3
+    return _SPEED_SPREAD.get(max(1, min(5, speed_level)), 3)
+
+
+def should_ripple(is_horn: bool, motion: Motion) -> bool:
+    """이 상태에서 '퍼지는 깜빡임'을 줄지. 경적은 상시(퍼짐 X), 접근 중일 때만 퍼진다."""
+    return (not is_horn) and (motion is Motion.APPROACHING)
+
+
+def ripple_brightness(
+    seg_index: int, center_index: int, radius: float,
+    frame: int, period: int = RIPPLE_PERIOD,
+) -> float:
+    """퍼지는 깜빡임의 세그먼트 밝기(0~1).
+
+    중앙에서 바깥으로 반경이 1→radius 로 커지며(퍼짐) 커질수록 흐려지다가 리셋 반복.
+    """
+    ph = (frame % period) / period                 # 0~1 위상
+    er = 1.0 + (radius - 1.0) * ph                  # 확장 반경
+    return segment_brightness(seg_index, center_index, er) * (1.0 - 0.55 * ph)

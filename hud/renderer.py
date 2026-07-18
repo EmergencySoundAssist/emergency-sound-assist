@@ -41,15 +41,26 @@ def vehicle_color(sound_text: str) -> tuple:
     return VEH_OTHER
 
 
-def _glow_segment(surface, x, y, w, h, color, b):
-    """밝기 b(0~1)로 LED 세그먼트 + 글로우. b<=0이면 꺼진 세그먼트(DIM)."""
+# LED 스트립 디자인 확정값 (디자인 스튜디오에서 튜닝)
+GLOW = 2.0                    # 세그먼트 번짐 강도 배수 (1.0 기본, 2.0 = 네온)
+SEG_H_RATIO = 26.0 / 360.0    # 세그먼트 높이 비율 (≈26px @360)
+
+
+def _glow_segment(surface, x, y, w, h, color, b, glow=1.0):
+    """밝기 b(0~1)로 LED 세그먼트 + 글로우. b<=0이면 꺼진 세그먼트(DIM).
+
+    glow: 번짐 강도 배수 — 헤일로의 크기·밝기를 함께 키운다.
+    """
     if b <= 0.0:
         pygame.draw.rect(surface, DIM, (x, y, w, h), border_radius=5)
         return
-    glow = pygame.Surface((w + 24, h + 24), pygame.SRCALPHA)
-    pygame.draw.rect(glow, (*color, int(70 * b)),
-                     (0, 0, w + 24, h + 24), border_radius=12)
-    surface.blit(glow, (x - 12, y - 12))
+    if glow > 0:
+        pad = int(12 * glow)
+        alpha = min(255, int(70 * b * glow))
+        g = pygame.Surface((w + 2 * pad, h + 2 * pad), pygame.SRCALPHA)
+        pygame.draw.rect(g, (*color, alpha),
+                         (0, 0, w + 2 * pad, h + 2 * pad), border_radius=12)
+        surface.blit(g, (x - pad, y - pad))
     col = tuple(int(c * (0.4 + 0.6 * b)) for c in color)
     pygame.draw.rect(surface, col, (x, y, w, h), border_radius=5)
 
@@ -129,11 +140,11 @@ class Renderer:
             show_dir = hud_card.direction_visible(view.direction)
             center = hud_card.direction_to_index(None, view.direction, n=15)
         if show_dir:
-            lit = hud_card.strip_lit(
-                getattr(view, "is_horn", False),
-                view.speed_level, view.approach_motion(), self._frame,
-            )
-            self._draw_direction_strip(surface, w, h, h // 2, color, center, lit)
+            radius = hud_card.spread_for_speed(view.speed_level)   # 접근 빠를수록 넓게
+            ripple = hud_card.should_ripple(getattr(view, "is_horn", False),
+                                            view.approach_motion())
+            self._draw_direction_strip(surface, w, h, h // 2, color, center,
+                                       radius, ripple, self._frame, GLOW)
 
         # 하단: 구분선 + 자막(있을 때만, 자동 줄바꿈)
         if view.subtitle:
@@ -144,10 +155,12 @@ class Renderer:
             )
             self._center_multiline(surface, lines, self._f_cap, FG, w // 2, h - int(h * 0.1))
 
-    def _draw_direction_strip(self, surface, w, h, y, color, center, lit):
+    def _draw_direction_strip(self, surface, w, h, y, color, center,
+                              radius, ripple, frame, glow):
         """15-세그먼트 방향 LED 스트립 + L/R 라벨을 행 y 에 그린다.
 
-        center: 점등 중심 세그먼트 인덱스. lit=False 면 전체 소등(꺼진 세그먼트만).
+        center: 점등 중심 세그먼트 인덱스. radius: 퍼짐 반경(접근 빠르기가 결정).
+        ripple=True 면 중앙→바깥으로 퍼지는 깜빡임, False 면 정적 클러스터.
         긴급/평상시(idle) 화면이 공유한다.
         """
         n = 15
@@ -155,10 +168,13 @@ class Renderer:
         gap = int(seg_w * 0.26)
         total = n * seg_w + (n - 1) * gap
         x0 = (w - total) // 2
-        seg_h = int(h * 0.064)
+        seg_h = int(h * SEG_H_RATIO)
         for i in range(n):
-            b = hud_card.segment_brightness(i, center, radius=3) if lit else 0.0
-            _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, seg_h, color, b)
+            if ripple:
+                b = hud_card.ripple_brightness(i, center, radius, frame)
+            else:
+                b = hud_card.segment_brightness(i, center, radius)
+            _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, seg_h, color, b, glow)
         ll = self._f_tag.render("L", True, MUTED)
         surface.blit(ll, (x0 - ll.get_width() - 18, y + seg_h // 2 - ll.get_height() // 2))
         rl = self._f_tag.render("R", True, MUTED)
@@ -178,9 +194,10 @@ class Renderer:
         self._frame = (self._frame + 1) % 100000
         self._text(surface, view.sound_text, self._f_mid, MUTED, 24, 24)
 
-        # 방향 바(idle) — STT 모드에서도 항상 표시(중립색, 중앙, 깜빡임 없음)
+        # 방향 바(idle) — STT 모드에서도 항상 표시(중립색, 중앙, 정적, 은은한 글로우)
         center = hud_card.direction_to_index(None, Direction.UNKNOWN, n=15)
-        self._draw_direction_strip(surface, w, h, int(h * 0.42), MUTED, center, True)
+        self._draw_direction_strip(surface, w, h, int(h * 0.42), MUTED, center,
+                                   3, False, self._frame, 1.0)
 
         # 하단 밴드: 자막(자동 줄바꿈) 또는 변환 중 점 애니메이션
         band_h = h // 3

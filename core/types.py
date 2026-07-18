@@ -114,6 +114,7 @@ class Motion(str, Enum):
 @dataclass
 class ApproachResult:
     motion: Motion
+    speed_level: Optional[int] = None    # 접근 빠르기 1~5 — 음량 기울기 크기 (접근 중일 때만)
 
 
 # ---------------------------------------------------------------------------

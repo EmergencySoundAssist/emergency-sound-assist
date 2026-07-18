@@ -342,6 +342,38 @@ def test_direction_visible_hides_front_only():
     assert direction_visible(Direction.UNKNOWN) is True
 
 
+# ── 접근 빠르기 → 퍼짐 반경 / 퍼지는 깜빡임 ───────────────────────────────
+
+def test_spread_for_speed_widens_with_speed():
+    from hud.card import spread_for_speed
+    assert spread_for_speed(None) == 3        # 접근 아님 → 기본
+    assert spread_for_speed(1) == 2           # 느린 접근 → 좁게
+    assert spread_for_speed(5) == 6           # 빠른 접근 → 넓게
+    assert spread_for_speed(1) < spread_for_speed(5)
+    assert spread_for_speed(99) == 6          # 범위 밖 클램프
+
+
+def test_should_ripple_only_when_approaching_and_not_horn():
+    from hud.card import should_ripple
+    from core.types import Motion
+    assert should_ripple(False, Motion.APPROACHING) is True
+    assert should_ripple(True, Motion.APPROACHING) is False    # 경적 = 상시
+    assert should_ripple(False, Motion.STEADY) is False
+    assert should_ripple(False, Motion.RECEDING) is False
+
+
+def test_ripple_brightness_expands_and_resets():
+    from hud.card import ripple_brightness, RIPPLE_PERIOD
+    # 위상 0: 중앙만 밝고(=1) 바깥은 꺼짐
+    assert ripple_brightness(7, 7, 6, 0) == 1.0
+    assert ripple_brightness(10, 7, 6, 0) == 0.0
+    # 위상이 진행되면 바깥 세그먼트가 켜진다(퍼짐)
+    mid = ripple_brightness(10, 7, 6, RIPPLE_PERIOD // 2)
+    assert mid > 0.0
+    # 주기마다 리셋(동일 위상 반복)
+    assert ripple_brightness(9, 7, 6, 3) == ripple_brightness(9, 7, 6, 3 + RIPPLE_PERIOD)
+
+
 def test_emergency_front_hides_bar():
     """전방(각도) → 방향 바 미표시: 스트립 행에 차종색 세그먼트가 없다."""
     import numpy as np

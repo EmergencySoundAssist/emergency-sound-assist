@@ -67,6 +67,26 @@ def run(label, **kw):
     return ok
 
 
+def test_speed_level_edges():
+    """음량 기울기 크기 → 접근 빠르기 1~5 (경계 포함)."""
+    from approach.detector import _speed_level
+    assert _speed_level(0.0) == 1
+    assert _speed_level(0.30) == 2
+    assert _speed_level(0.60) == 3
+    assert _speed_level(0.90) == 4
+    assert _speed_level(1.30) == 5
+    assert _speed_level(9.9) == 5           # 클램프
+
+
+def test_update_carries_speed_level_field():
+    """update() 가 ApproachResult.speed_level 을 채운다(무음이면 None)."""
+    from core.types import ApproachResult
+    det = ApproachDetector()
+    r = det.update(AudioChunk(samples=np.zeros(SAMPLE_RATE, dtype=np.float32)))
+    assert isinstance(r, ApproachResult)
+    assert r.speed_level is None           # 무음 → 접근 아님 → None
+
+
 if __name__ == "__main__":
     results = [
         run("기본 60km/h·8m·clean", snr_db=40.0),
