@@ -50,7 +50,8 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
-def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console") -> None:
+def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console",
+               sender=None) -> None:
     """하이브리드 루프. view="console": 상세 로그(영구 줄+상태줄). view="dashboard": 제자리 갱신 패널."""
     from pipeline import alert
 
@@ -62,8 +63,12 @@ def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console")
             for chunk in chunks:
                 ev, info = pipe.process(chunk)
                 dash.update(ev, info)
+                if sender is not None and info:          # BLE: 폰(→워치)로 전송
+                    sender.send_alert(ev, info)
         finally:
             dash.close()
+            if sender is not None:
+                sender.close()
             if stt_worker is not None:
                 stt_worker.stop()
         return
@@ -75,6 +80,8 @@ def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console")
     try:
         for chunk in chunks:
             ev, info = pipe.process(chunk)
+            if sender is not None and info:             # BLE: 폰(→워치)로 전송
+                sender.send_alert(ev, info)
             sink.emit(ev)                           # ONSET/REMIND/CLEAR 만 영구 출력
             if ev.clear:
                 shown_dir = False
@@ -99,6 +106,8 @@ def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console")
                           info.get("risk"), info.get("dir_raw"), info.get("gauge"))
     finally:
         sink.close()
+        if sender is not None:
+            sender.close()
         if stt_worker is not None:
             stt_worker.stop()
 
@@ -123,6 +132,10 @@ def main() -> None:
                     help="tick 간격(초). 기본 0.15 (석우 런타임과 동일 — 예비경보 ~1.8s)")
     ap.add_argument("--view", choices=["console", "dashboard"], default="console",
                     help="출력 형식: console(상세 로그) / dashboard(제자리 갱신 패널, 보기 쉬움)")
+    ap.add_argument("--ble", action="store_true",
+                    help="감지 결과를 BLE로 폰(→워치 미러링 진동)에 전송 (bleak 필요)")
+    ap.add_argument("--watch-mac", default=None,
+                    help="BLE 대상 MAC 직접 지정(미지정 시 서비스 UUID로 폰 자동 검색)")
     args = ap.parse_args()
 
     stt_worker = None
@@ -144,18 +157,26 @@ def main() -> None:
         stt_worker.start()
         print(f"[stt] 평상시 자막 ON (모델 {cfg.model_size}, 백그라운드 스레드) — 사이렌·경적일 땐 자동 멈춤")
 
+    # --ble 일 때만 BLE 송신기 시작 (없으면 sender=None → 전송 생략, 지연 import)
+    sender = None
+    if args.ble:
+        from notify import BleSender
+        sender = BleSender(address=args.watch_mac)
+        sender.start()
+        print("== BLE: 전송 활성화 (폰 GATT 서버를 서비스 UUID로 검색) ==")
+
     if args.demo:
         print(f"== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) · tick {args.tick}s ==")
         sig = _synth_passby()
-        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick, args.view)
+        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick, args.view, sender)
     elif args.wav:
         print(f"== WAV: {args.wav} · tick {args.tick}s ==")
         sig = load_wav(args.wav)
-        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick, args.view)
+        run_stream(iter_chunks_from_array(sig, chunk_seconds=args.tick), stt_worker, args.tick, args.view, sender)
     else:
         print(f"== MIC: 실시간 · tick {args.tick}s (Ctrl+C 종료) ==")
         run_stream(iter_chunks_from_mic(device=args.device, channels=args.channels,
-                                        chunk_seconds=args.tick), stt_worker, args.tick, args.view)
+                                        chunk_seconds=args.tick), stt_worker, args.tick, args.view, sender)
 
 
 if __name__ == "__main__":
