@@ -1,6 +1,6 @@
 # DoA 실행 명령어 모음
 
-방향추정(DoA) 코드를 돌릴 때 쓰는 명령어 정리. **항상 `python` 사용**(이 프로젝트 conda 환경 기준 — `python3`는 시스템 파이썬을 가리킬 수 있음).
+방향추정(DoA) 상세 옵션 문서다. 공통 설치와 통합 실행은 [전체 실행 문서](../running.md)를 먼저 본다.
 
 > **설정은 [`doa/config.py`](../../doa/config.py) 한 곳에서 관리.** 매번 플래그를 치기 싫으면
 > config.py 값(hop/hold/algo/num/led + 스무딩 `SMOOTH`/`CONF_MIN` + 보정값)을 바꾸면 된다.
@@ -10,21 +10,17 @@
 
 ---
 
-## 0. 환경 (최초 1회 + 작업 시작 시)
+## 0. 환경
 ```bash
-# 최초 1회 (Mac/일반)
 python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
 pip install -r requirements.txt       # 의존성 설치
-#   ※ Jetson(aarch64)은 conda 불가 → 위 venv 사용. 상세: jetson.md
-
-# 작업 시작할 때마다
 source .venv/bin/activate
 ```
 실행은 **레포 루트에서 `python -m doa.<모듈>`** (모듈 실행 — `python doa/live.py` 는 import 깨짐).
 
 ## 1. 테스트 (하드웨어 불필요)
 ```bash
-python -m pytest -q                           # 전체 (56개)
+python -m pytest -q                           # 전체 회귀 테스트
 python -m pytest tests/test_multi_source.py   # 다중 peak + 신뢰도(spectrum_confidence)
 python -m pytest tests/test_tracking.py       # 시간 다수결(circular_median, DirectionTracker)
 python -m pytest tests/test_led_ring.py       # LED 매핑/payload
@@ -116,7 +112,7 @@ python -m doa.led_ring         # LED 한 칸씩 회전 — 링 동작 확인
 | `Invalid number of channels` | 기본 입력이 ReSpeaker가 아님 → 자동 탐지하지만 `sd.query_devices()`로 6채널 장치 확인 |
 | 계속 `방향 불확실` | `--conf-min 0` 으로 conf 분포 보고 임계 조정. 단일 음원이면 `--num 1` (유령 2번째 제거) |
 | 방향이 ±180° 반대로 튐 | 스무딩이 억제(기본 ON). 그래도 심하면 `--conf-min` 올리고, 단일 음원은 `--num 1` |
-| LED `Access denied` | `sudo python -m doa.led_ring` 또는 udev 규칙(리눅스/Jetson → [jetson.md](./jetson.md)) |
+| LED `Access denied` | udev 규칙을 적용한다(리눅스/Jetson → [jetson.md](./jetson.md)). 일시 진단만 필요하면 활성화된 venv에서 `sudo "$(which python)" -m doa.led_ring` 사용 |
 | `⚠느림` 표시 | `--window` 줄이기 / `--algo srp` / `--hop` 늘리기 |
 | 방향은 맞는데 LED 위치가 회전됨 | `config.LED_OFFSET` 조정(한 칸=30°) |
 | 좌/우가 반대 | `config.MIRROR` 토글 ([direction-mapping.md](./direction-mapping.md)) |

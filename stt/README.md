@@ -1,117 +1,60 @@
-# ④ STT (음성→텍스트) 모듈
+# ④ STT(음성→텍스트)
 
-주변 음성(경찰 확성기·외침·안내방송)을 **텍스트로** 바꿔 청각장애 운전자에게 보여 준다.
-(긴급 여부 판단은 ① 분류 모듈의 몫 — STT 는 텍스트만 책임진다.)
+주변의 확성기·외침·안내방송을 텍스트로 바꾼다. STT는 긴급음을 판정하지 않으며,
+사이렌·경적 경보가 켜지면 분류 파이프라인이 STT를 중단한다.
 
-- 인터페이스: `Transcriber.transcribe(chunk) → SpeechResult` (`core/types.py`)
-- 설계: [../docs/stt/design.md](../docs/stt/design.md)
-- Jetson 배포/의존성 상세: [../docs/stt/jetson.md](../docs/stt/jetson.md)
-
----
-
-## 빠른 실행 (노트북 = Jetson 기본 경로, 난이도 동일)
-
-다른 모듈과 똑같이 **그냥 설치하고 실행**하면 된다. CPU로 돈다.
+## 설치와 실행
 
 ```bash
-pip install faster-whisper
-python -m stt.run --wav some_speech.wav      # 파일 한 방 인식
-python -m stt.run --mic                       # 기본 마이크 실시간
-python -m stt.run --mic --respeaker           # ReSpeaker ch0 (Jetson 타겟)
-python -m stt.run --mic --model small         # 한국어는 small 권장
+pip install -r stt/requirements.txt
+
+python -m stt.run --wav speech.wav
+python -m stt.run --mic
+python -m stt.run --mic --respeaker
+
+# 통합 파이프라인
+python main.py --mic --channels 6 --stt
+python main.py --mic --channels 6 --stt --stt-model small  # CPU 지연을 줄일 때
 ```
 
-- 코드가 `device="auto"` 라 **GPU가 잡히면 자동으로 CUDA**, 없으면 CPU로 떨어진다 → 노트북·Jetson 동일 코드.
-- 말하고 **잠깐 멈추면** 그때 한 문장이 출력된다(무음=발화 끝 신호). **Ctrl+C** 종료.
-- 엔진 없이 로직만 검증: `pytest tests/test_stt.py` (가짜 엔진 주입, 설치 불필요).
+기본 설정은 다국어 `medium`, 한국어 고정, CPU `int8`/CUDA `float16` 자동 선택이다.
+Mac CPU 검증에서 `medium`은 긴 문장 처리량은 실시간보다 빨랐지만 짧은 발화 한 건당
+약 4.3초가 걸렸다. 빠른 자막이 더 중요하면 `small`을 사용하고 정확도를 다시 확인한다.
 
----
+## 현재 처리 방식
 
-## "왜 STT만 Jetson 문서가 복잡해 보이나?" — 정리
+1. 1초 입력을 Silero ONNX VAD로 검사한다.
+2. 음성이 이어지는 동안 최대 8초까지 모은다.
+3. 발화가 끝나면 faster-whisper가 한 번에 인식한다.
+4. Whisper 내부 Silero VAD로 도로소음을 다시 거른다.
+5. 휴리스틱 신뢰도가 0.4 미만인 자막은 표시하지 않는다.
+6. 인식은 백그라운드 워커에서 수행한다. 긴급 진입 시 이전 세대의 대기·진행·완료
+   자막을 모두 무효화한다.
 
-결론부터: **그냥 돌리는 건 위처럼 다른 브랜치만큼 간단하다.** 복잡한 부분은
-전부 *실시간 GPU 가속*과 *네 모듈을 한 보드에 합칠 때*의 이야기이고, **선택 사항**이다.
+`vad_backend="auto"`의 폴백 순서는 Silero → WebRTC → energy다. `--vad N`을 지정하면
+명시적으로 energy VAD로 바뀐다. RMS 정규화는 잡음도 키울 수 있어 기본값은 꺼져 있다.
 
-### 1. STT만 GPU를 원하는 모듈이라서 (본질적 이유)
-| 모듈 | 연산 | GPU 필요? |
-|------|------|:--------:|
-| doa | 신호처리 (numpy/scipy/pyroomacoustics) | ❌ CPU로 충분 |
-| approach | 작은 CNN (ONNX) | ❌ CPU로 충분 |
-| classifier | 학습은 torch/TF, **보드 런타임은 ONNX** | ❌ (학습은 노트북) |
-| **stt** | **Whisper (큰 트랜스포머)** | ⚠️ 실시간이면 GPU |
+## 운영 시 확인할 상태
 
-→ doa/approach는 "aarch64에서 CUDA 빌드" 벽을 만날 일이 없다. STT만 **GPU를 원하는 순간**
-   그 벽을 만난다. 코드 설계 탓이 아니라 "큰 모델"이라는 본질 때문.
+- `last_error`: 인식 오류. 워커는 죽지 않고 다음 입력에서 복구를 시도한다.
+- `dropped_chunks`: 디코딩이 입력보다 느려 큐가 찼을 때 생략한 1초 청크 수.
+- `reset_count`: 긴급 경보 진입으로 STT가 초기화된 횟수.
 
-### 2. 하필 CTranslate2의 Jetson-CUDA 사정이 나빠서 (라이브러리 속성)
-- approach의 onnxruntime은 NVIDIA가 Jetson용 `onnxruntime-gpu`를 제공 → 비교적 표준.
-- faster-whisper의 백엔드 CTranslate2는 **aarch64 CUDA 휠을 깔끔히 제공하지 않음**
-  → Docker(jetson-containers) 또는 소스빌드가 필요. (PyPI aarch64 휠은 CPU 전용)
+콘솔과 대시보드는 오류 및 누적 드롭을 표시한다. 오류가 반복되거나 드롭이 계속 늘면
+`--stt-model small`로 낮추거나 Jetson CUDA 경로를 사용한다.
 
-### 3. 의존성 충돌은 "전 모듈 합칠 때"만, 그것도 플래그 하나
-- faster-whisper가 `onnxruntime`(CPU)을 끌어와 approach의 `onnxruntime-gpu`를 덮을 수 있음.
-- 우리 STT는 **자체 energy VAD**라 onnxruntime이 불필요 → `pip install --no-deps faster-whisper` 하나로 회피.
-- 아직 네 모듈을 한 보드에 합친 적이 없으니 **지금 당장의 문제는 아님**(미래 대비).
+## 검증
 
-### 다른 모듈도 각자 Jetson 주의사항이 있다
-- `doa-jamin` → [../docs/doa/jetson.md](../docs/doa/jetson.md) (pyroomacoustics 빌드, udev 규칙)
-- `feat/realtime-approach-pipeline` → requirements.txt에 onnxruntime-gpu/TensorRT 주석
-- 즉 **모든 런타임 모듈이 각자 함정이 있고**, STT는 그중 "GPU를 원하는" 한 개일 뿐.
-
----
-
-## 속도 올리기 (느릴 때)
-
-영향 큰 순서:
-
-1. **전력 모드 최대 (무료·즉시, CPU/GPU 둘 다 큼)**
-   ```bash
-   sudo nvpmodel -m 0 && sudo jetson_clocks
-   ```
-2. **GPU 가속 (가장 큰 폭)** — CPU `small`은 경계선, GPU `small`은 ~6-7배 실시간.
-   → [../docs/stt/jetson.md](../docs/stt/jetson.md)의 GPU 절차(Docker 권장).
-3. **CPU면 모델 줄이기** — `--model base`(small의 2~3배 빠름) 또는 `--model tiny`. 한국어 정확도와 트레이드오프.
-4. **CPU 스레드 늘리기** — Orin 6코어:
-   ```bash
-   python -m stt.run --mic --respeaker --model base --threads 6
-   ```
-5. 이미 적용된 것: `beam_size=1`(greedy), `int8`(CPU)/`float16`(GPU), energy VAD(무음 스킵),
-   발화 단위 인식, `condition_on_previous_text=False`(반복/환각 억제).
-
-> 체감 지연(latency)은 "말 끝나고 인식"하는 발화 단위 설계 탓도 있다. 더 빨리 반응하게 하려면
-> `STTConfig.silence_release_chunks`/`max_utterance_seconds`를 줄이되, 문장이 잘릴 수 있어 주의.
-
-## 정확도·범위 올리기
-
-검증 리서치(faster-whisper 1.2.x / Orin Nano) 기반으로 **기본값이 이미 정확도·범위 우선**입니다:
-
-| 항목 | 기본값 | 효과 |
-|------|--------|------|
-| 모델 | `small` (was base) | 한국어 인식 정확도↑ (base는 너무 약함) |
-| RMS 정규화 | ON | 먼/조용한 음성을 키워 **범위↑** |
-| VAD 임계값 | 0.01→**0.005** | 더 멀고 작은 음성도 Whisper 까지 도달 |
-| 환각 가드 | 명시 유지 | 게이트 넓혀도 헛인식 안 새게 |
-
-**더 강하게(속도 양보):**
 ```bash
-python -m stt.run --mic --respeaker --accuracy           # beam 5 + 정규화
-python -m stt.run --mic --respeaker --model medium        # 8GB 메모리·지연 보드에서 측정 후
-python -m stt.run --mic --respeaker --beam 3              # beam 직접 지정
+pytest -q tests/test_stt.py
+python -m evaluation.download_figshare_samples --kind road --count 6
+python -m evaluation.download_fleurs_samples --count 20
+python -m evaluation.benchmark_stt --corpus fleurs --model medium
+python -m evaluation.benchmark_stt --corpus tts --model medium
 ```
 
-### 적용됨
-- **webrtcvad VAD** — 말소리/비음성 구분(노이즈 환각 억제). torch 0(Jetson 호환). 없으면 energy 폴백. `pip install webrtcvad-wheels` 권장. 강제: `--vad`(energy 임계)·config `vad_backend`.
-- **스레드 캡처** — 변환(블로킹) 중에도 마이크를 계속 읽어 입력이 안 끊김. 끄려면 `--no-thread`.
+사람 음성 80건과 긴급차량 문장 TTS 40건의 결과 및 한계는
+[STT 검증 문서](../docs/stt/validation.md)에 기록했다.
 
-### 더 짜낼 수 있는 것 (로드맵)
-1. **ReSpeaker XVF-3000 DSP 튜닝** (range) — pyusb 로 HPF·노이즈서프레션·AGC 레지스터 조정(보드+하드웨어). doa 브랜치 `respeaker_tuning.py` 재사용.
-2. **Silero VAD(onnx 직접)** (range) — webrtcvad 가 실차에서 부족하면, silero_vad.onnx 를 onnxruntime 으로 직접 구동(torch 없이). VAD 가 교체 가능하게 돼 있어 `stt/vad.py` 에 클래스만 추가.
-3. **SNR-게이트 DeepFilterNet 디노이징** (range/med) — **기본 OFF**, 저SNR 에서만. 실차 녹음 A/B 후.
-
-> 범위·정확도엔 ① ReSpeaker DSP 튜닝이 다음 큰 카드. 디노이징·더 큰 모델은 **반드시 실차 녹음으로 검증 후** 적용.
-
-## 두 갈래로 보면 간단
-| 목적 | 방법 | 난이도 |
-|------|------|--------|
-| **그냥 돌리기** | `pip install faster-whisper` + 실행 (CPU) | 다른 브랜치와 동일 |
-| **실시간 GPU** | [../docs/stt/jetson.md](../docs/stt/jetson.md)의 GPU 절차 (선택 업그레이드) | Docker 권장 |
+- 상세 설계: [design.md](../docs/stt/design.md)
+- Jetson 배포: [jetson.md](../docs/stt/jetson.md)

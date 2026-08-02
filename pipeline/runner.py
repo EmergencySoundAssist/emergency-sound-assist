@@ -2,7 +2,7 @@
 하이브리드 실시간 파이프라인 — 석우(ViT deploy) 경보 엔진 + 우리 방향/STT.  (exp/hybrid-runtime)
 
   chunk(0.15s tick) → 검출 마진(5s 확정 + 2s 예비 87f) → alert 상태기계(Gate)
-    긴급 활성:  차종 다수결(SubtypeVote, yt판) + 접근/멀어짐(음량 기울기 approach.detector)
+    긴급 활성:  차종 다수결(SubtypeVote, yt판) + 접근/멀어짐(조건부 C 융합)
                + 방향(SRP-PHAT, ch1~4 롤링 0.5s)  ·  STT reset(발화 버퍼 비움)
     평상시   :  STT — 0.15s 청크를 ★1초 뭉치로 모아 워커에 feed
                (silence_release 가 청크 개수 기준이라, 잘게 넣으면 숨쉬기에 발화가 잘림 — 확정 결정)
@@ -10,11 +10,11 @@
   process(chunk) → (alert.AlertEvent, info)
     info: m_siren/state/level/risk/dir_raw(즉시)/direction/angle/speech/label/conf
 
-lean(feat/lean-integration) 대비 변경:
-  매 tick FusedResult → 상태기계 이벤트(ONSET/REMIND/CLEAR, 켜기 쉽게/끄기 느리게)
-  접근/멀어짐 = 음량 기울기(approach.detector) — 신경망 dirhead 제거(원리 투명·모델 불필요).
-    음량 커지는 추세=접근·작아지는 추세=멀어짐(소스 음량 상쇄 → 스피커 크기 불변).
-    clf.speed_dir()/alert.SpeedTracker 경로는 미사용(코드 보존 — 되돌리기 쉽게).
+현재 통합 동작:
+  매 tick 상태기계 이벤트(ONSET/REMIND/CLEAR, 켜기 쉽게/끄기 느리게) 생성
+  접근/멀어짐 = speed_neural_dir + 음량 기울기 + 직접 도플러의 조건부 C 융합.
+    모델은 실제 5초 창 이후에만 실행하고, 도플러는 충돌 보조 근거로만 사용한다.
+    속도 km/h/단계는 공개 데이터 검증에서 신뢰도가 부족해 최종 표시하지 않는다.
   차종 부활 (yt 실채널 파인튜닝판 + 6초 다수결)
 """
 
@@ -28,21 +28,23 @@ from core.types import AudioChunk, Motion, SAMPLE_RATE
 from classifier import inference as clf
 from approach.detector import ApproachDetector
 from pipeline import alert
+from pipeline.motion_fusion import ConditionalMotionFusion
 
 SUBS = ("구급차", "경찰차", "소방차")     # subtype_clf.SUBS 순서 (yt 모델 동일)
 DIR_WIN_S = 0.5                           # 방향(SRP) 분석 창 — 다채널 롤링 버퍼 길이(초)
 
-# 접근/멀어짐(음량 기울기) → 상태줄 '지금=' 즉시 표시용 인덱스 (alert.DIR_KO 순서).
+# 접근/멀어짐 → 상태줄 '지금=' 즉시 표시용 인덱스(0=정지, 1=접근, 2=멀어짐).
 # 유지/미상은 즉시 화살표를 띄우지 않는다(정지 vs 유지 혼동 회피).
 _MOTION_DIR_IDX = {Motion.APPROACHING: 1, Motion.RECEDING: 2}
 
 
-def _approach_tier(motion, level, proximity=None):
-    """approach.Motion(+빠르기 1~5, +상대 근접도) → 위험도 tier 문자열. 미상/무관이면 None.
-    접근일 때 음량 기울기 크기로 빠르기 1~5단계를 그대로 표시(예: '접근(빠르기4)').
+def _approach_tier(motion, proximity=None):
+    """융합 움직임(+상대 근접도) → 위험도 문자열. 미상/무관이면 None.
+
+    미검증 속도 단계는 위험도에 넣지 않는다.
     근접도(최근접/근거리/원거리)는 최근접 이후에만 붙는다 (예: '멀어짐·근거리')."""
     if motion is Motion.APPROACHING:
-        base = f"접근(빠르기{level})" if level else "접근"
+        base = "접근"
     elif motion is Motion.RECEDING:
         base = "멀어짐"
     elif motion is Motion.STEADY:
@@ -65,13 +67,14 @@ class Pipeline:
         self.g_siren = alert.Gate(alert.CFG["siren"], dt)
         self.g_horn = alert.Gate(alert.CFG["horn"], dt)
         self.g_fast = alert.Gate(alert.CFG["siren_fast"], dt)
-        # 접근/멀어짐 = 음량 기울기(approach.detector) — 신경망 dirhead 대체(원리 투명·모델 불필요).
-        # 자체 3초 추세 윈도우로 스무딩하므로 SpeedTracker(tick 스무딩)는 불필요.
+        # 조건부 C 융합: 모델·음량·직접 도플러를 독립 계산한 뒤 상황별로 선택.
         self.approach = ApproachDetector(sample_rate=SAMPLE_RATE)
+        self.motion_fusion = ConditionalMotionFusion(smooth_size=max(3, round(1.5 / dt)))
         # 시간상수(차종투표≈6s) 유지 — 석우 UnifiedRuntime 과 동일 계산
         self.svote = alert.SubtypeVote(SUBS, win=max(8, round(6.0 / dt)))
         self._stt_acc: list = []                  # ★ STT 1초 뭉치 누적
         self._stt_len = 0
+        self._stt_emergency = False               # 긴급 진입 edge에서만 worker reset
         self._dir_buf: Optional[np.ndarray] = None   # (n,4) 방향용 롤링
         self._dir_sr: Optional[int] = None
 
@@ -79,8 +82,11 @@ class Pipeline:
         s = np.asarray(chunk.samples)
         mono = s[:, 0] if s.ndim == 2 else s      # ch0 = 처리채널 (검출·차종·속도·STT)
         self._push_dir(s, chunk.sample_rate)      # ch1~4 = 방향용 롤링
+        motion_chunk = AudioChunk(samples=mono, sample_rate=chunk.sample_rate)
+        # 사이렌이 확정되는 순간 '직전 3초'를 쓸 수 있도록 평상시에도 관측 창만 갱신한다.
+        self.approach.observe(motion_chunk)
 
-        res = clf.analyze(AudioChunk(samples=mono, sample_rate=chunk.sample_rate))
+        res = clf.analyze(motion_chunk)
         if res is None:                           # 워밍업(버퍼 부족)
             return alert.build_event("none", 0.0, None), {}
 
@@ -91,16 +97,33 @@ class Pipeline:
         sub = risk = None
         dir_idx = None
         gauge = None
-        ap_motion = ap_speed = ap_prox = None         # 대시보드용 구조화 값
+        ap_motion = ap_prox = None                    # 대시보드용 구조화 값
+        fusion_source = None
+        model_motion = model_confidence = model_speed_kmh = None
+        energy_slope = frequency_slope = doppler_confidence = None
+        movement_level = None
         pre = False
         if sg["active"]:                          # 우선순위: 확정 siren > 예비(PRE) > horn
             kind, margin, gate = "siren", res["m_siren"], sg
-            # 음량 기울기 → 접근/멀어짐/유지 (+빠르기·근접도·연속 게이지). 사이렌 활성 동안만 판정.
-            ap = self.approach.update(AudioChunk(samples=mono, sample_rate=chunk.sample_rate))
-            risk = _approach_tier(ap.motion, ap.speed_level, ap.proximity)  # +상대 근접도
-            dir_idx = _MOTION_DIR_IDX.get(ap.motion)    # 상태줄 '지금=' 즉시 표시용(접근/멀어짐만)
+            # 세 증거를 따로 계산한 뒤 조건부로 선택한다. 모델은 실제 5초 창 전에는 None.
+            if sg["onset"]:
+                self.approach.reset(keep_buffer=True)  # 새 이벤트 근접도 기준, 최근 3초는 보존
+            ap = self.approach.current()
+            model = clf.speed_evidence()
+            fused = self.motion_fusion.update(model, ap)
+            risk = _approach_tier(fused.motion, ap.proximity)
+            dir_idx = _MOTION_DIR_IDX.get(fused.motion) # 상태줄 '지금=' 즉시 표시용(접근/멀어짐만)
             gauge = ap.gauge                            # 연속 근접 게이지(0~1) — 막대 표시용
-            ap_motion, ap_speed, ap_prox = ap.motion, ap.speed_level, ap.proximity
+            ap_motion, ap_prox = fused.motion, ap.proximity
+            movement_level = ap.speed_level             # 음량 변화 강도(차량 속도로 표시하지 않음)
+            fusion_source = fused.source
+            energy_slope = ap.energy_slope
+            frequency_slope = ap.frequency_slope
+            doppler_confidence = ap.doppler_confidence
+            if model is not None:
+                model_motion = (Motion.STEADY, Motion.APPROACHING, Motion.RECEDING)[model.direction_index]
+                model_confidence = model.confidence
+                model_speed_kmh = model.speed_kmh        # 진단용 원시값, 실제 km/h로 표시 금지
             if self.g_siren.state == "ON":              # FALLING(꺼진 꼬리) 중엔 새 투표 없음
                 sp = clf.subtype_probs()
                 if sp is not None:
@@ -116,18 +139,25 @@ class Pipeline:
             gate = {"onset": False, "remind": False,
                     "clear": sg["clear"] or hg["clear"] or bool(fg and fg["clear"])}
         if sg["clear"]:                            # 경보 해제 → 다음 경보 위해 리셋
-            self.approach.reset()
+            self.approach.reset(keep_buffer=True)
+            self.motion_fusion.reset()
             self.svote.reset()
 
         emergency = sg["active"] or hg["active"] or bool(fg and fg["active"])
         direction, angle = self._direction() if emergency else (None, None)
         speech = self._stt_step(mono, chunk.sample_rate, emergency)
+        stt_status = (self._stt.status()
+                      if self._stt is not None and hasattr(self._stt, "status") else None)
 
         ev = alert.build_event(kind, margin, gate, sub, risk, pre=pre)
         info = dict(m_siren=res["m_siren"], state=self.g_siren.state, level=ev.level,
                     risk=risk, dir_raw=dir_idx, gauge=gauge, direction=direction, angle=angle,
-                    motion=ap_motion, speed_level=ap_speed, proximity=ap_prox,
-                    speech=speech, label=res["label"], conf=res["conf"])
+                    motion=ap_motion, proximity=ap_prox,
+                    movement_level=movement_level, fusion_source=fusion_source,
+                    model_motion=model_motion, model_confidence=model_confidence,
+                    model_speed_kmh=model_speed_kmh, energy_slope=energy_slope,
+                    frequency_slope=frequency_slope, doppler_confidence=doppler_confidence,
+                    speech=speech, stt_status=stt_status, label=res["label"], conf=res["conf"])
         return ev, info
 
     # ------------------------------------------------------------------
@@ -167,9 +197,12 @@ class Pipeline:
         if self._stt is None:
             return None
         if emergency:                              # 긴급 우선 — 모으던 발화도 버림
-            self._stt.reset()
+            if not self._stt_emergency:            # 매 tick reset을 쌓지 않고 진입 시 한 번만
+                self._stt.reset()
+            self._stt_emergency = True
             self._stt_acc, self._stt_len = [], 0
             return None
+        self._stt_emergency = False
         self._stt_acc.append(np.asarray(mono, dtype=np.float32))
         self._stt_len += len(mono)
         if self._stt_len >= sr:                    # 1초 모임 → 워커로 (tick 크기와 무관)

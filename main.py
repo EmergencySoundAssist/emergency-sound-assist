@@ -9,9 +9,9 @@ EmergencySoundAssist 실시간 메인 루프.
 하이브리드 런타임 (exp/hybrid-runtime — 석우 경보엔진 + 우리 방향/STT):
   검출  : 이중 창 (5s 확정 + 2s 예비 87f) · 로짓 마진 → alert 상태기계 (ONSET/REMIND/CLEAR)
   차종  : yt 실채널 파인튜닝판 + 6초 다수결 (사이렌 ON 중)
-  움직임: 음량 기울기 (approach.detector — 접근/멀어짐/유지 + 빠르기) — 우리 것
+  움직임: speed_neural_dir + 음량 + 직접 도플러의 조건부 C 융합
   방향  : SRP-PHAT (ch1~4, 긴급 중) — 우리 것
-  STT   : webrtcvad→Whisper 백그라운드 — 우리 것 (★1초 뭉치 feed)
+  STT   : Silero VAD→Whisper 백그라운드 — 우리 것 (★1초 뭉치 feed)
   tick  : 0.15s 기본 (--tick)
 """
 
@@ -70,6 +70,8 @@ def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console")
 
     sink = alert.make_sink("console")
     shown_dir = False                               # 경보당 방향 1회 표시 (튀는 도배 방지)
+    last_stt_error = None
+    last_stt_dropped = 0
     try:
         for chunk in chunks:
             ev, info = pipe.process(chunk)
@@ -83,6 +85,15 @@ def run_stream(chunks, stt_worker=None, dt: float = 0.15, view: str = "console")
             sp = info.get("speech")
             if sp is not None and sp.is_speech and sp.text:
                 print(f"\r\033[K         ↳ 자막: \"{sp.text}\"", flush=True)
+            stt_status = info.get("stt_status") or {}
+            error = stt_status.get("last_error")
+            if error and error != last_stt_error:
+                print(f"\r\033[K         ↳ STT 오류(워커 유지): {error}", flush=True)
+            last_stt_error = error
+            dropped = int(stt_status.get("dropped_chunks", 0))
+            if dropped > last_stt_dropped:
+                print(f"\r\033[K         ↳ STT 지연: 입력 {dropped - last_stt_dropped}개 생략", flush=True)
+            last_stt_dropped = dropped
             if info:
                 sink.tick(info["m_siren"], info["state"], info["level"],
                           info.get("risk"), info.get("dir_raw"), info.get("gauge"))
@@ -116,6 +127,13 @@ def main() -> None:
 
     stt_worker = None
     if args.stt:
+        try:
+            import faster_whisper  # noqa: F401 — 시작 시 의존성 확인
+        except ImportError as exc:
+            raise SystemExit(
+                "[stt] faster-whisper가 없습니다. "
+                "먼저 `.venv/bin/python -m pip install -r stt/requirements.txt`를 실행하세요."
+            ) from exc
         from stt.transcriber import Transcriber
         from stt.config import STTConfig
         from stt.worker import STTWorker

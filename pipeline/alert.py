@@ -34,82 +34,6 @@ CFG = {
 }
 TAU_CRIT = 4.0   # 이 마진 이상 + 지속이면 CRITICAL (속도 무관)
 
-# 위험도 tier. 제품 출력은 km/h가 아니라 tier 문자열.
-# SPEED_TIERS = 방향-미상 모드(speed_tier)의 집합. 방향 헤드가 있으면 dir_tier가
-# {정지, 멀어짐, 접근-느림, 접근-빠름}을 내며 SpeedTracker는 문자열 비교라 둘 다 수용.
-# 정지 deadband: v̂이 작으면 무조건 "정지" — OOD 바닥(~10)이 만드는 false-이동 억제.
-# ⚠ "접근/멀어짐"이 아니라 "이동": 현 속도망은 절대속도만 회귀(방향 미학습) —
-#   멀어지는 사이렌도 v̂이 크면 잡히므로 접근이라 표기하면 거짓. 방향 헤드(P1) 후 복원.
-# ⚠ 경계·deadband는 실주행 캘리 대상(placeholder).
-SPEED_TIERS = ("정지", "이동-느림", "이동-빠름")
-
-
-def speed_tier(v: float, deadband: float = 20.0, fast: float = 40.0) -> str:
-    if v < deadband:
-        return SPEED_TIERS[0]
-    if v < fast:
-        return SPEED_TIERS[1]
-    return SPEED_TIERS[2]
-
-
-# 방향 헤드(speed_neural --dir-head) 클래스 순서 = speed_neural.DIR_KO
-DIR_KO = ("정지", "접근", "멀어짐")
-
-
-def dir_tier(dir_idx: int, v: float, fast: float = 40.0) -> str:
-    """방향(정지/접근/멀어짐) × 속도 → 위험도 tier. 정지·멀어짐은 방향 헤드가 판정
-    (deadband 불필요 — still(v=0) 학습으로 바닥 문제를 원인 치료), 접근만 속도로 세분."""
-    if dir_idx == 0:
-        return "정지"
-    if dir_idx == 2:
-        return "멀어짐"
-    return "접근-빠름" if v >= fast else "접근-느림"
-
-
-class SpeedTracker:
-    """v̂(+방향) tick 스무딩 + tier 전환 히스테리시스 — 단일 tick 노이즈 깜빡임 억제.
-    v는 최근 n_med tick 중앙값, 방향은 다수결. 새 후보 tier가 k_switch tick 연속일 때만 전환.
-    ⚠ n_med/k_switch는 tick 수 — 기본값은 0.25s tick 기준(9≈2.2s, 4≈1s).
-    stride가 다르면 호출측에서 스케일해 넘길 것(UnifiedRuntime이 dt 기준으로 계산).
-    update(v)      → 방향 미상: 정지/이동-느림/이동-빠름 (deadband 기반)
-    update(v, dir) → 방향 헤드: 정지/멀어짐/접근-느림/접근-빠름"""
-
-    def __init__(self, n_med: int = 9, k_switch: int = 4):
-        self.buf = deque(maxlen=n_med)
-        self.dbuf = deque(maxlen=n_med)
-        self.k = k_switch
-        self.tier = SPEED_TIERS[0]
-        self._cand, self._run = None, 0
-
-    def update(self, v: float, dir_idx: int | None = None) -> str:
-        self.buf.append(float(v))
-        if dir_idx is not None:
-            self.dbuf.append(int(dir_idx))
-        elif self.dbuf:
-            self.dbuf.clear()      # 방향 신호 끊김 → 즉시 속도-only 폴백(오래된 방향 고착 방지)
-        s = sorted(self.buf)
-        vm = s[len(s) // 2]                          # v 중앙값
-        if self.dbuf:
-            dm = Counter(self.dbuf).most_common(1)[0][0]   # 방향 다수결
-            cand = dir_tier(dm, vm)
-        else:
-            cand = speed_tier(vm)
-        if cand == self.tier:
-            self._cand, self._run = None, 0
-        elif cand == self._cand:
-            self._run += 1
-            if self._run >= self.k:
-                self.tier, self._cand, self._run = cand, None, 0
-        else:
-            self._cand, self._run = cand, 1
-        return self.tier
-
-    def reset(self) -> None:
-        self.buf.clear()
-        self.dbuf.clear()
-        self.tier = SPEED_TIERS[0]
-        self._cand, self._run = None, 0
-
 
 class SubtypeVote:
     """차종 시간 다수결 — 경보 활성 동안 tick별 argmax를 투표(신뢰 미달 tick은 기권),
@@ -311,7 +235,7 @@ class DashboardSink:
     """제자리 갱신 대시보드 — 스크롤 대신 한 판이 실시간으로 바뀐다(보기 쉬움).
     run_stream 이 매 tick update(ev, info)만 부른다. tty 아니면 조용(파이프 도배 방지).
 
-    긴급:  종류·차종·레벨 / 방향 / 움직임+빠르기 / 근접 게이지
+    긴급:  종류·차종·레벨 / 방향 / 움직임 / 근접 게이지
     평상시: 자막(STT)  ·  워밍업: 대기 중"""
 
     _COL = {"CRITICAL": "\033[1;31m", "WARN": "\033[1;33m", "PRE": "\033[1;33m"}
@@ -343,11 +267,16 @@ class DashboardSink:
             return [self._TOP, "  ⏳ 대기 중…", self._BOT]
         if ev.kind == "none":                          # 평상시 — STT 자막
             sp = info.get("speech")
-            if sp is not None and getattr(sp, "is_speech", False) and sp.text:
+            stt_status = info.get("stt_status") or {}
+            if stt_status.get("last_error"):
+                cap = f"  ⚠ STT 오류  {stt_status['last_error']}"
+            elif sp is not None and getattr(sp, "is_speech", False) and sp.text:
                 cap = f'  💬 자막  "{sp.text}"'
             else:
                 cap = "  💬 자막  (음성 없음)"
-            return [self._TOP, "  🟢 평상시", cap, self._BOT]
+            dropped = int(stt_status.get("dropped_chunks", 0))
+            queue_line = f"  ⚠ STT 지연  누적 {dropped}개 입력 생략" if dropped else None
+            return [self._TOP, "  🟢 평상시", cap, *([queue_line] if queue_line else []), self._BOT]
 
         # 긴급 (사이렌/경적)
         icon = {"siren": "🚨 사이렌", "horn": "📢 경적"}.get(ev.kind, ev.label)
@@ -363,9 +292,7 @@ class DashboardSink:
             dline = "  방향   미상 (ReSpeaker 6채널 필요)"
 
         m = info.get("motion")
-        spd = info.get("speed_level")
-        spdtxt = f"   빠르기 {spd}/5" if (m is Motion.APPROACHING and spd) else ""
-        mline = f"  움직임  {_MOTION_KO.get(m, '판단중')}{spdtxt}"
+        mline = f"  움직임  {_MOTION_KO.get(m, '판단중')}"
 
         g = info.get("gauge")
         if g is not None:

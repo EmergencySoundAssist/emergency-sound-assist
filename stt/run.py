@@ -30,11 +30,12 @@ from .config import STTConfig
 from .transcriber import Transcriber, transcribe_array, _rms, _to_mono
 
 
-def _meter(rms: float, threshold: float, width: int = 16) -> str:
-    """입력 음량 막대 + VAD 임계 통과 표시."""
+def _meter(rms: float, threshold: float, is_voice: bool | None = None, width: int = 16) -> str:
+    """입력 음량 막대 + 실제 VAD 판정 표시."""
     filled = max(0, min(width, int((rms / 0.3) * width)))   # 0~0.3 RMS 를 막대로
     bar = "█" * filled + "·" * (width - filled)
-    mark = "🎙️" if rms >= threshold else "  "               # 임계 넘으면(=음성 인정) 마이크 표시
+    active = rms >= threshold if is_voice is None else is_voice
+    mark = "🎙️" if active else "  "
     return f"{mark}|{bar}| {rms:5.3f}"
 
 
@@ -87,9 +88,9 @@ def run_mic(cfg: STTConfig, respeaker: bool = False, device: int | None = None,
                     print("(인식 결과 없음 — 더 또렷이/가까이 말해보세요)")
             elif meter:                              # 변환 안 했으면 라이브 미터
                 if result.is_speech:
-                    _status("🎙️ 듣는 중  " + _meter(rms, cfg.vad_rms_threshold))
+                    _status("🎙️ 듣는 중  " + _meter(rms, cfg.vad_rms_threshold, True))
                 else:
-                    _status("·  대기     " + _meter(rms, cfg.vad_rms_threshold))
+                    _status("·  대기     " + _meter(rms, cfg.vad_rms_threshold, False))
     except KeyboardInterrupt:
         _clear()
         tail = transcriber.flush()                   # 종료 직전 남은 발화 처리
@@ -111,7 +112,10 @@ def main() -> None:
     ap.add_argument("--threads", type=int, default=None, help="CPU 스레드 수(Orin 6코어면 6). 속도↑")
     ap.add_argument("--accuracy", action="store_true", help="정확도 우선(beam↑, 속도 양보)")
     ap.add_argument("--beam", type=int, default=None, help="beam_size 직접 지정(정확도↑/속도↓)")
-    ap.add_argument("--vad", type=float, default=None, help="VAD 임계값(기본 0.02). 조용한 실내면 ↓, 도로면 ↑")
+    ap.add_argument("--vad", type=float, default=None,
+                    help="energy VAD RMS 임계값. 지정하면 backend도 energy로 전환")
+    ap.add_argument("--vad-backend", choices=("auto", "silero", "webrtc", "energy"), default=None,
+                    help="VAD 방식. 기본 auto(Silero → WebRTC → energy)")
     ap.add_argument("--normalize", action="store_true", help="RMS 정규화 켜기(입력이 일관되게 작을 때만)")
     ap.add_argument("--no-meter", action="store_true", help="라이브 음량 미터/상태 표시 끄기")
     ap.add_argument("--no-thread", action="store_true", help="캡처 스레드 끄기(변환 중 입력 끊김 허용)")
@@ -130,8 +134,12 @@ def main() -> None:
         cfg = STTConfig.for_accuracy(cfg)
     if args.beam is not None:
         cfg.beam_size = args.beam
+    if args.vad_backend is not None:
+        cfg.vad_backend = args.vad_backend
     if args.vad is not None:
         cfg.vad_rms_threshold = args.vad
+        if args.vad_backend is None:
+            cfg.vad_backend = "energy"          # 다른 backend에서 무시되는 혼동 방지
     if args.normalize:
         cfg.normalize_audio = True
 

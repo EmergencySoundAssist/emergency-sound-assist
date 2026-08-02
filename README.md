@@ -1,77 +1,77 @@
 # EmergencySoundAssist
 
-청각장애 운전자를 위한 **긴급 경고음 감지 보조 디바이스**.
-차량 주변의 사이렌·경적 같은 소리를 AI로 감지해, **종류·방향·접근 여부**를 시각 정보로 바꿔준다.
+청각장애 운전자를 위해 주변의 긴급 소리와 음성을 분석해 **소리 종류·차종·방향·이동 상태·자막**을
+제공하는 프로젝트다.
 
-> 최종 출력 예: **"사이렌, 후방, 빠르게 접근 중"**  (접근 빠르기 1~5단계 포함)
-> 차종(구급/경찰/소방)은 선택 기능 — 기본 구성에서 제외 (subtype onnx 를 넣으면 자동 활성).
+현재 통합 파이프라인은 다음 기능을 연결한다.
 
----
+| 기능 | 현재 구현 |
+|---|---|
+| 긴급음 검출 | 2초 PRE 예비경보, 5초 사이렌·경적 확정 |
+| 사이렌 차종 | 구급차·경찰차·소방차 분류 |
+| 방향 | ReSpeaker 원시 4채널의 SRP-PHAT/MUSIC 또는 장치 자체 DoA |
+| 접근·멀어짐 | `speed_neural_dir` 모델·음량 변화·직접 도플러의 조건부 융합 |
+| 평상시 음성 | faster-whisper 기반 한국어 STT, 긴급음 중 자동 중단 |
 
-## MVP 3대 기능
-| # | 기능 | 내용 | 담당 |
-|---|------|------|------|
-| ① | 소리 분류 | siren / horn / normal + 접근빠르기(1~5) · 차종은 선택 | 이석우, 김달현 |
-| ② | 방향 추정 | 전 / 후 / 좌 / 우 | 천자민 |
-| ③ | 접근/멀어짐 | 도플러 + 음량 추세 | 김도윤 |
+최종 화면에는 예를 들어 `구급차 · 후방 · 접근 중`과 같은 경보가 표시된다. 접근 모델의
+원시 `speed` 값은 km/h로 검증되지 않았으므로 현재 사용자 화면에는 속도로 표시하지 않는다.
 
-> **확장(④ STT)**: 주변 음성(확성기·외침·안내방송)을 **텍스트로** 바꿔 청각장애 운전자에게 보여 준다. → [docs/stt/design.md](docs/stt/design.md) · 담당: 천자민
+## 빠른 실행
 
----
-
-## 프로젝트 구조
-```
-core/         공통 데이터 약속 (types.py)
-audio/        오디오 입력 (마이크/파일)
-classifier/   ① 소리 분류  ← 구현됨 (CNN+Attn ONNX 검출 · 차종은 선택, 기본 제외)
-doa/          ② 방향 추정  ← 구현됨 (자체 DoA·다중음원 SRP/MUSIC·LED·스무딩·진단)
-approach/     ③ 접근/멀어짐 ← 구현됨 (실시간 도플러 + 음량 추세)
-stt/          ④ STT 음성→텍스트 ← 구현됨 (faster-whisper · 확장, 독립 실행)
-pipeline/     세 결과 통합  ← 구현됨 (FusedResult → "사이렌, 후방, 접근 중")
-docs/         설계 문서  → docs/README.md
-```
-
-## 설치 / 실행
 ```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-pip install -r requirements.txt       # 의존성 설치
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -r requirements.txt
 
-# ① 분류
-python classify.py --demo             # 합성 사이렌으로 분류 확인
-python classify.py --mic              # 실시간 마이크
-
-# 통합 파이프라인 (분류+접근+방향)
-python main.py --demo                          # 합성 (방향은 미상 — 1채널)
-python main.py --mic --channels 6              # ReSpeaker 자동 탐지 (미탐지 시 --device N 지정)
-python main.py --mic --channels 6 --stt --stt-model small   # + 평상시 자막 (CPU는 small, 노트북 데모는 tiny)
-#   시작 로그 "[audio] 입력 장치: …" 로 어떤 마이크가 열렸는지 확인 (5초 연속 무음이면 경고 출력)
-#   STT 는 백그라운드 스레드로 돌아 메인을 안 막음 / 사이렌·경적일 땐 자동 멈춤 / faster-whisper 필요
-
-# ② 방향만 단독 (ReSpeaker 필요)
-python -m doa.multi_live --led        # 실시간 방향 + LED
-python -m pytest -q                   # 테스트
+python main.py --demo
+python main.py --mic --channels 6 --view dashboard
+python -m pytest -q
 ```
-실행 옵션 → [docs/doa/running.md](docs/doa/running.md) · Jetson 배포 → [docs/doa/jetson.md](docs/doa/jetson.md)
 
----
+STT를 사용할 때는 STT 의존성을 추가한 뒤 실행한다.
 
-## 하드웨어
-- NVIDIA Jetson Orin Nano Super Dev Kit
-- microSD 128GB
-- ReSpeaker USB Mic Array (XVF-3000, 4-mic)
+```bash
+pip install -r stt/requirements.txt
+python main.py --mic --channels 6 --stt --stt-model small
+```
 
-자세히 → [docs/hardware.md](docs/hardware.md)
+전체 실행 옵션, 단독 모듈 실행, 평가 재현, Jetson GPU·TensorRT 확인 방법은
+**[실행 명령어](docs/running.md)**에 한곳으로 정리했다. Jetson에서는 일반 PyPI 패키지가
+CUDA/TensorRT 빌드를 덮어쓸 수 있으므로 해당 문서의 Jetson 절을 먼저 확인한다.
 
----
+## ReSpeaker 채널 사용
 
-## 개발 단계
-1. **노트북(CPU)** 에서 각 모듈 개발/검증 (현재)
-2. **Jetson + ReSpeaker** 이식 → 실시간 통합
-3. (이후) HUD/디스플레이 연결
+ReSpeaker는 물리 마이크가 4개지만 USB 입력은 6채널이다.
 
----
+| USB 채널 | 용도 |
+|---|---|
+| `ch0` | 분류·차종·접근·STT |
+| `ch1~4` | 방향 추정용 원시 마이크 4채널 |
+| `ch5` | 재생 참조, 현재 미사용 |
+
+## 저장소 구조
+
+```text
+audio/        마이크·WAV 입력
+classifier/   긴급음 검출과 사이렌 차종 분류
+doa/          방향 추정·다중 음원·LED·진단
+approach/     접근 모델과 신호 특징 계산
+stt/          VAD·faster-whisper 자막
+pipeline/     경보 상태기계와 조건부 이동 융합
+core/         공통 타입
+evaluation/   접근·STT 공개 데이터 평가
+tests/        단위·통합 테스트
+docs/         설계·실행·검증 문서
+```
 
 ## 문서
-설계 문서는 [`docs/`](docs/README.md) 참고:
-- [전체 구조](docs/architecture.md) · [데이터 인터페이스](docs/interfaces.md) · [하드웨어](docs/hardware.md) · [용어집](docs/glossary.md)
-- [① 분류](docs/classifier/design.md) · [↳ 차종](docs/classifier/subtype.md) · [② 방향](docs/doa/design.md) · [③ 접근](docs/approach/design.md) · [④ STT](docs/stt/design.md)
+
+- [문서 전체 목차](docs/README.md)
+- [실행 명령어](docs/running.md)
+- [전체 구조와 동작 흐름](docs/architecture.md)
+- [하드웨어와 채널 구성](docs/hardware.md)
+- [데이터 인터페이스](docs/interfaces.md)
+- [사용 여부와 정리 후보](docs/unused-code-models.md)
+- [접근·멀어짐 설계](docs/approach/design.md) · [검증 결과](docs/approach/validation.md)
+- [STT 설계](docs/stt/design.md) · [검증 결과](docs/stt/validation.md)

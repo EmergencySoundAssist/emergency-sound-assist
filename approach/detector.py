@@ -34,10 +34,9 @@ from core.types import AudioChunk, ApproachResult, Motion, SAMPLE_RATE
 # 사이렌 에너지 대역(Hz): 기본 톤 + 낮은 배음.
 _BAND = (300.0, 2500.0)
 
-# 접근 빠르기 단계 경계 (log-파워/초 → 1~5).  ← 튜닝 대상
-# 음량 기울기의 '크기' = 다가오는 빠르기 (소스 음압 상쇄 → 스피커 크기 불변).
-# 합성 실측: 60km/h·측면 8m 원거리 접근 구간 기울기 ~0.8 → 3단계.
-SPEED_LEVEL_EDGES = (0.30, 0.60, 0.90, 1.30)
+# 음량 변화 강도 경계 (log-파워/초 → 1~5).
+# 실제 차량 속도와의 대응은 검증되지 않았으므로 UI에는 속도로 표시하지 않는다.
+MOVEMENT_LEVEL_EDGES = (0.30, 0.60, 0.90, 1.30)
 
 # 상대 근접도 경계 — 이벤트 내 '최고 음량(=최근접)' 대비 지금 위치.
 # 물리: power ∝ 1/r² → log-파워 낙폭 Δ → 거리비 r/r_min = exp(Δ/2).
@@ -54,10 +53,10 @@ MIN_RISE = 1.5          # 이벤트 시작 대비 최고치가 이만큼(≈6.5d
 GAUGE_SPAN = float(os.environ.get("ESA_GAUGE_SPAN", "1.5"))   # 기본 1.5 (≈6.5dB)
 
 
-def _speed_level(eslope: float) -> int:
-    """음량 기울기(log-파워/초) → 접근 빠르기 1~5단계."""
+def _movement_level(eslope: float) -> int:
+    """음량 기울기(log-파워/초) → 변화 강도 1~5단계(차량 속도 아님)."""
     lvl = 1
-    for edge in SPEED_LEVEL_EDGES:
+    for edge in MOVEMENT_LEVEL_EDGES:
         if eslope >= edge:
             lvl += 1
     return min(lvl, 5)
@@ -134,7 +133,7 @@ class ApproachDetector:
         hop_seconds: float = 0.25,        # sub-frame 간격
         band=_BAND,
         prominence: float = 2.5,          # 톤 검출 문턱(중앙값 대비 배수)
-        energy_deadband: float = 0.10,    # log-파워/초 (이 안쪽은 '유지')  ← 튜닝 대상
+        energy_deadband: float = 0.20,    # source-wise CV 선택값: 이 안쪽은 '유지'
         glide_threshold: float = 8.0,     # Hz/초, 강한 하강 글라이드 = 통과 진행  ← 튜닝 대상
         min_valid_frames: int = 4,        # 부호 확정에 필요한 최소 톤 프레임
         min_span_seconds: float = 1.5,    # 부호 확정에 필요한 최소 관측 시간
@@ -154,27 +153,38 @@ class ApproachDetector:
         self._peak_loge = -np.inf          # 이벤트 내 최고 음량(=최근접 지점) 추적
         self._start_loge = None            # 이벤트 시작 음량 (의미있는 접근 판단 기준)
 
-    def reset(self) -> None:
-        """새 이벤트 시작 시 상태 초기화."""
-        self._buf = np.zeros(0, dtype=np.float64)
+    def reset(self, keep_buffer: bool = False) -> None:
+        """이벤트 상태를 초기화한다.
+
+        ``keep_buffer=True``이면 최근 3초 관측은 보존하고 근접도 기준만 새로 잡는다.
+        사이렌 확정 시 직전 신호까지 즉시 분석하기 위한 파이프라인용 모드다.
+        """
+        if not keep_buffer:
+            self._buf = np.zeros(0, dtype=np.float64)
         self._last = Motion.UNKNOWN
         self._peak_loge = -np.inf          # 근접도 기준(최고 음량)도 리셋
         self._start_loge = None
 
-    def update(self, chunk: AudioChunk) -> ApproachResult:
+    def observe(self, chunk: AudioChunk) -> None:
+        """판정 여부와 무관하게 최근 오디오 창에 청크를 추가한다."""
         x = _to_mono(chunk.samples)
         self._buf = np.concatenate([self._buf, x])[-self.maxlen:]
-        motion, level, prox, rel, gauge = self._decide()
-        self._last = motion
-        return ApproachResult(motion=motion, speed_level=level,
-                              proximity=prox, rel_distance=rel, gauge=gauge)
+
+    def current(self) -> ApproachResult:
+        """현재 최근 오디오 창을 중복 추가 없이 판정한다."""
+        result = self._decide()
+        self._last = result.motion
+        return result
+
+    def update(self, chunk: AudioChunk) -> ApproachResult:
+        self.observe(chunk)
+        return self.current()
 
     # ------------------------------------------------------------------
     def _decide(self):
-        """→ (Motion, 빠르기 1~5|None, 근접도|None, 거리비|None).
-        빠르기는 접근일 때만(기울기 크기), 근접도는 최근접 이후(peak 대비)."""
+        """음량 판단과 조건부 융합에 쓸 도플러 진단값을 함께 반환."""
         if self._buf.size < self.frame:
-            return Motion.UNKNOWN, None, None, None, None
+            return ApproachResult(Motion.UNKNOWN)
 
         ts, fs, es = [], [], []
         for start in range(0, self._buf.size - self.frame + 1, self.hop):
@@ -188,10 +198,11 @@ class ApproachDetector:
         es = np.asarray(es)
 
         tone = ~np.isnan(fs)                      # 사이렌 톤이 잡힌 프레임
+        tone_ratio = float(tone.mean()) if tone.size else 0.0
         if tone.sum() < self.min_valid_frames:
-            return Motion.UNKNOWN, None, None, None, None  # 톤 관측 부족 (비사이렌/무음)
+            return ApproachResult(Motion.UNKNOWN, tone_ratio=tone_ratio)
         if np.ptp(ts[tone]) < self.min_span_seconds:
-            return Motion.UNKNOWN, None, None, None, None  # 관측 시간 부족 (아직 추세 불명)
+            return ApproachResult(Motion.UNKNOWN, tone_ratio=tone_ratio)
 
         # 주 신호: log-에너지 추세(부호가 통과점에서 뒤집힘)
         e_ok = np.isfinite(es)
@@ -199,10 +210,25 @@ class ApproachDetector:
         # 보강: 도플러 주파수 추세 (강한 하강 = 통과 진행)
         fslope = _slope(ts[tone], fs[tone])
 
+        # 직접 도플러 증거의 신뢰도: 변화량만 크다고 믿지 않고, 톤 지속성과 선형 추세
+        # 설명력(R²)을 함께 요구한다. 사이렌 자체 변조 때문에 단독 최종판정에는 쓰지 않는다.
+        pred = fslope * ts[tone] + float(np.mean(fs[tone]) - fslope * np.mean(ts[tone]))
+        ss_res = float(np.sum((fs[tone] - pred) ** 2))
+        ss_tot = float(np.sum((fs[tone] - np.mean(fs[tone])) ** 2))
+        frequency_r2 = max(0.0, 1.0 - ss_res / (ss_tot + 1e-12))
+        magnitude = float(np.clip((abs(fslope) - self.glide_threshold) / 40.0, 0.0, 1.0))
+        doppler_confidence = magnitude * min(1.0, tone_ratio / 0.7) * frequency_r2
+        if fslope > 0:
+            doppler_motion = Motion.APPROACHING
+        elif fslope < 0:
+            doppler_motion = Motion.RECEDING
+        else:
+            doppler_motion = Motion.UNKNOWN
+
         level = None
         if eslope > self.energy_deadband:
             motion = Motion.APPROACHING
-            level = _speed_level(eslope)           # 기울기 크기 = 접근 빠르기 (1~5)
+            level = _movement_level(eslope)        # 호환 필드: 음량 변화 강도(차량 속도 아님)
         elif eslope < -self.energy_deadband:
             motion = Motion.RECEDING
         else:
@@ -215,7 +241,19 @@ class ApproachDetector:
 
         cur_loge = float(es[e_ok][-1]) if e_ok.any() else None
         prox, rel, gauge = self._proximity(motion, cur_loge)
-        return motion, level, prox, rel, gauge
+        return ApproachResult(
+            motion=motion,
+            speed_level=level,
+            proximity=prox,
+            rel_distance=rel,
+            gauge=gauge,
+            energy_slope=float(eslope),
+            frequency_slope=float(fslope),
+            doppler_confidence=float(doppler_confidence),
+            doppler_motion=doppler_motion,
+            tone_ratio=tone_ratio,
+            frequency_r2=float(frequency_r2),
+        )
 
     def _proximity(self, motion, cur_loge):
         """이벤트 내 최고 음량(=최근접) 대비 현재 → (근접도 라벨, 거리비, 연속 게이지).

@@ -5,8 +5,8 @@
 여기 정의된 형식만 지키면 pipeline 단계에서 문제없이 합쳐진다.
 
 - 오디오 입력 형식: AudioChunk
-- 각 모듈의 출력 형식: ClassResult / DirectionResult / ApproachResult
-- 최종 통합 결과: FusedResult  (예: "사이렌, 후방, 접근 중")
+- 각 독립 모듈의 출력 형식: ClassResult / DirectionResult / ApproachResult / SpeechResult
+- 실시간 통합 출력은 pipeline.alert.AlertEvent와 진단 info dict를 사용한다.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ import numpy as np
 # ---------------------------------------------------------------------------
 SAMPLE_RATE = 16_000          # Hz. 음성/환경음 분류에서 일반적으로 충분한 값.
 CHUNK_SECONDS = 1.0           # 한 번에 분석하는 오디오 길이(초).
-CHANNELS = 4                  # ReSpeaker XVF-3000 = 4채널. 분류는 보통 1채널로 다운믹스.
 
 
 @dataclass
@@ -66,8 +65,6 @@ class ClassResult:
     is_emergency: bool                       # siren/horn 이면 True
     subtype: Optional[SirenSubtype] = None          # siren 일 때만 차종 (구급/경찰/소방/불명)
     subtype_confidence: Optional[float] = None      # 차종 확률 0~1 (없으면 None)
-    speed_level: Optional[int] = None               # siren 접근 속도 1~5 (느림~빠름)
-    speed_kmh: Optional[float] = None               # 원시 추정 속도(km/h, 참고용)
 
     @staticmethod
     def from_label(
@@ -75,8 +72,6 @@ class ClassResult:
         confidence: float,
         subtype: Optional[SirenSubtype] = None,
         subtype_confidence: Optional[float] = None,
-        speed_level: Optional[int] = None,
-        speed_kmh: Optional[float] = None,
     ) -> "ClassResult":
         emergency = label in (SoundClass.SIREN, SoundClass.HORN)
         return ClassResult(
@@ -85,8 +80,6 @@ class ClassResult:
             is_emergency=emergency,
             subtype=subtype,
             subtype_confidence=subtype_confidence,
-            speed_level=speed_level,
-            speed_kmh=speed_kmh,
         )
 
 
@@ -120,11 +113,20 @@ class Motion(str, Enum):
 @dataclass
 class ApproachResult:
     motion: Motion
-    speed_level: Optional[int] = None    # 접근 빠르기 1~5 — 음량 기울기 크기 (접근 중일 때만)
+    # 아래 speed_level은 과거 호환용 '음량 변화 강도'다. 공개 데이터 검증에서 실제 차량
+    # 속도와의 대응이 확인되지 않아 최종 UI에서는 속도로 표시하지 않는다.
+    speed_level: Optional[int] = None
     # 상대 근접도 — 이벤트 내 '가장 컸던 순간(=최근접)' 대비 지금 위치. 절대 거리(m)가 아님.
     proximity: Optional[str] = None      # "최근접" / "근거리" / "원거리" (접근 중·미상이면 None)
     rel_distance: Optional[float] = None # 최근접 대비 거리비 (≥1.0, 1.0=가장 가까웠던 지점)
     gauge: Optional[float] = None        # 연속 근접 게이지 0.0~1.0 — 다가오면 차오르고 멀어지면 빠짐
+    # 조건부 융합용 원시 진단값. None은 관측 창/톤이 아직 부족하다는 뜻이다.
+    energy_slope: Optional[float] = None       # log-대역파워/초: +커짐, -작아짐
+    frequency_slope: Optional[float] = None    # 대표 주파수 Hz/초
+    doppler_confidence: Optional[float] = None # 단일 피크 추세의 유효도(0~1)
+    doppler_motion: Motion = Motion.UNKNOWN    # 직접 도플러 가설(단독 최종판정 금지)
+    tone_ratio: Optional[float] = None          # 분석 프레임 중 톤 검출 비율
+    frequency_r2: Optional[float] = None        # 주파수 선형 추세 설명력
 
 
 # ---------------------------------------------------------------------------
@@ -149,56 +151,3 @@ class SpeechResult:
         if not self.is_speech or not self.text:
             return "(음성 없음)"
         return f"\"{self.text}\""
-
-
-# ---------------------------------------------------------------------------
-# 최종 통합 결과
-# ---------------------------------------------------------------------------
-@dataclass
-class FusedResult:
-    """pipeline 이 모듈 결과를 합친 최종 출력 (STT 자막은 평상시에만)."""
-    sound: ClassResult
-    direction: DirectionResult
-    approach: ApproachResult
-    speech: Optional[SpeechResult] = None      # ④ STT 자막 (평상시만, 긴급이면 None)
-
-    def to_korean(self) -> str:
-        """예: '구급차, 후방, 접근 중' / 평상시 음성이면 '… · 자막: "…"'"""
-        ko_subtype = {
-            SirenSubtype.AMBULANCE: "구급차",
-            SirenSubtype.POLICE: "경찰차",
-            SirenSubtype.FIRE: "소방차",
-            SirenSubtype.UNKNOWN: "긴급차량",
-        }
-        if self.sound.label is SoundClass.SIREN and self.sound.subtype is not None:
-            ko_sound = ko_subtype[self.sound.subtype]      # 사이렌 → 차종으로 세분화
-        else:
-            ko_sound = {
-                SoundClass.SIREN: "사이렌",
-                SoundClass.HORN: "경적",
-                SoundClass.NORMAL_TRAFFIC: "일반 도로 소음",
-            }[self.sound.label]
-        ko_dir = {
-            Direction.FRONT: "전방",
-            Direction.REAR: "후방",
-            Direction.LEFT: "좌측",
-            Direction.RIGHT: "우측",
-            Direction.UNKNOWN: "방향 미상",
-        }[self.direction.direction]
-        ko_motion = {
-            Motion.APPROACHING: "접근 중",
-            Motion.RECEDING: "멀어짐",
-            Motion.STEADY: "유지",
-            Motion.UNKNOWN: "이동 미상",
-        }[self.approach.motion]
-        # 접근 중이면 빠르기 형용사를 붙인다 ('빠르게 접근 중').
-        # 1차 소스 = 접근 모듈의 음량 기울기 단계 (견고, 스피커 크기 불변).
-        # (신경망 속도 모델(sound.speed_level)은 미검증이라 기본 OFF — 켜면 폴백으로만 사용)
-        level = self.approach.speed_level or self.sound.speed_level
-        if level is not None and self.approach.motion is Motion.APPROACHING:
-            spd = {1: "아주 느리게 ", 2: "천천히 ", 3: "", 4: "빠르게 ", 5: "매우 빠르게 "}
-            ko_motion = f"{spd[level]}접근 중"
-        line = f"{ko_sound}, {ko_dir}, {ko_motion}"
-        if self.speech is not None and self.speech.is_speech and self.speech.text:
-            line += f"  · 자막: {self.speech.to_korean()}"   # 평상시 음성 자막
-        return line
