@@ -33,6 +33,7 @@ CFG = {
     "siren_fast": dict(tau_on=2.0, tau_off=0.5, N_on=2, T_hang=1.0, K_vote=3, M_win=5, T_remind=9999.0),
 }
 TAU_CRIT = 4.0   # 이 마진 이상 + 지속이면 CRITICAL (속도 무관)
+CAPTION_HOLD_SECONDS = 5.0  # 대시보드에서 완성 자막을 읽을 수 있도록 유지하는 시간
 
 
 class SubtypeVote:
@@ -236,15 +237,18 @@ class DashboardSink:
     run_stream 이 매 tick update(ev, info)만 부른다. tty 아니면 조용(파이프 도배 방지).
 
     긴급:  종류·차종·레벨 / 방향 / 움직임 / 근접 게이지
-    평상시: 자막(STT)  ·  워밍업: 대기 중"""
+    평상시: 마지막 자막을 5초 유지  ·  워밍업: 대기 중"""
 
     _COL = {"CRITICAL": "\033[1;31m", "WARN": "\033[1;33m", "PRE": "\033[1;33m"}
     _TOP = "━━━━━ 🚨 긴급음 감지 ━━━━━━━━━━━━━━━━━━"
     _BOT = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    def __init__(self):
+    def __init__(self, caption_hold_seconds: float = CAPTION_HOLD_SECONDS):
         self.tty = sys.stdout.isatty()
         self._lines = 0
+        self._caption_hold_seconds = max(0.0, float(caption_hold_seconds))
+        self._caption_text = ""
+        self._caption_until = 0.0
 
     def update(self, ev, info) -> None:
         lines = self._render(ev, info)
@@ -263,17 +267,26 @@ class DashboardSink:
 
     def _render(self, ev, info) -> list:
         rst = "\033[0m" if self.tty else ""
+        if ev.kind != "none":                       # 긴급 화면에 이전 평상시 자막을 남기지 않음
+            self._clear_caption()
         if not info:                                   # 워밍업(버퍼 부족)
             return [self._TOP, "  ⏳ 대기 중…", self._BOT]
         if ev.kind == "none":                          # 평상시 — STT 자막
             sp = info.get("speech")
             stt_status = info.get("stt_status") or {}
             if stt_status.get("last_error"):
+                self._clear_caption()
                 cap = f"  ⚠ STT 오류  {stt_status['last_error']}"
-            elif sp is not None and getattr(sp, "is_speech", False) and sp.text:
-                cap = f'  💬 자막  "{sp.text}"'
             else:
-                cap = "  💬 자막  (음성 없음)"
+                now = time.monotonic()
+                if sp is not None and getattr(sp, "is_speech", False) and sp.text:
+                    self._caption_text = sp.text
+                    self._caption_until = now + self._caption_hold_seconds
+                if self._caption_text and now < self._caption_until:
+                    cap = f'  💬 자막  "{self._caption_text}"'
+                else:
+                    self._clear_caption()
+                    cap = "  💬 자막  (음성 없음)"
             dropped = int(stt_status.get("dropped_chunks", 0))
             queue_line = f"  ⚠ STT 지연  누적 {dropped}개 입력 생략" if dropped else None
             return [self._TOP, "  🟢 평상시", cap, *([queue_line] if queue_line else []), self._BOT]
@@ -304,6 +317,10 @@ class DashboardSink:
             gline = "  근접   [░░░░░░░░░░]"
 
         return [self._TOP, head, dline, mline, gline, self._BOT]
+
+    def _clear_caption(self) -> None:
+        self._caption_text = ""
+        self._caption_until = 0.0
 
 
 class GpioSink:

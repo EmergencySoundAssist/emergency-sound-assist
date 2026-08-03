@@ -23,6 +23,7 @@ from stt.transcriber import (
 from stt.vad import EnergyVad, SileroVad, WebRtcVad, make_vad
 from stt.worker import STTWorker
 from audio.capture import iter_chunks_threaded
+from pipeline import alert as alert_module
 from pipeline.runner import Pipeline
 
 
@@ -541,3 +542,76 @@ def test_engine_transcribe_oom_rebuilds_and_retries():
     text, _, _ = eng.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
     assert text == "복구됨"
     assert eng._compute_type == "int8_float16"  # 변환 OOM 후 폴백됨
+
+
+# ---------------------------------------------------------------------------
+# 대시보드 자막 유지
+# ---------------------------------------------------------------------------
+def _dashboard_event(kind="none"):
+    return alert_module.AlertEvent(
+        level="NONE" if kind == "none" else "WARN",
+        kind=kind,
+        label="" if kind == "none" else "경적",
+        margin=0.0,
+        onset=False,
+        remind=False,
+        clear=False,
+    )
+
+
+def test_dashboard_holds_caption_for_reading(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(alert_module.time, "monotonic", lambda: clock[0])
+    dashboard = alert_module.DashboardSink(caption_hold_seconds=5.0)
+
+    lines = dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="앞에 사고가 발생했습니다", is_speech=True)},
+    )
+    assert any("앞에 사고가 발생했습니다" in line for line in lines)
+
+    clock[0] = 104.9
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+    assert any("앞에 사고가 발생했습니다" in line for line in lines)
+
+    clock[0] = 105.0
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+    assert any("(음성 없음)" in line for line in lines)
+
+
+def test_dashboard_new_caption_replaces_and_extends_hold(monkeypatch):
+    clock = [10.0]
+    monkeypatch.setattr(alert_module.time, "monotonic", lambda: clock[0])
+    dashboard = alert_module.DashboardSink(caption_hold_seconds=5.0)
+
+    dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="첫 문장", is_speech=True)},
+    )
+    clock[0] = 13.0
+    dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="두 번째 문장", is_speech=True)},
+    )
+    clock[0] = 17.9
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+
+    assert any("두 번째 문장" in line for line in lines)
+    assert all("첫 문장" not in line for line in lines)
+
+
+def test_dashboard_emergency_clears_held_caption(monkeypatch):
+    clock = [20.0]
+    monkeypatch.setattr(alert_module.time, "monotonic", lambda: clock[0])
+    dashboard = alert_module.DashboardSink(caption_hold_seconds=5.0)
+
+    dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="긴급 전 자막", is_speech=True)},
+    )
+    dashboard._render(_dashboard_event("horn"), {"speech": None})
+    clock[0] = 21.0
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+
+    assert any("(음성 없음)" in line for line in lines)
+    assert all("긴급 전 자막" not in line for line in lines)
