@@ -97,6 +97,14 @@ def _renderer_and_surface():
     return r, pygame.Surface((1280, 720))
 
 
+def _bar_rows():
+    """바 세그먼트가 차지하는 y 구간 (1280x720). 좌표는 Layout 에서만 가져온다."""
+    from hud.card import Layout
+    lo = Layout.for_size(1280, 720)
+    top = lo.bar_cy - lo.seg_h // 2
+    return top, top + lo.seg_h
+
+
 def _view(direction, angle_deg=None, subtitle="", sound="구급차"):
     from hud.viewmodel import HudView
     from core.types import Motion
@@ -206,7 +214,7 @@ def test_dots_brightness_is_periodic():
     assert dots_brightness(3) == dots_brightness(3 + 24)
 
 
-# ── Task 3: 경적 접근 억제 (strip_lit / _subline) ─────────────────────────
+# ── Task 3: 경적 접근 억제 (strip_lit) ────────────────────────────────────
 
 def test_strip_lit_horn_always_on():
     """경적은 접근 깜빡임 없이 상시 점등 (blink 이라면 꺼졌을 프레임에도 켜짐)."""
@@ -224,25 +232,6 @@ def test_strip_lit_non_horn_follows_blink():
     from core.types import Motion
     assert strip_lit(False, None, Motion.APPROACHING, 0) is True    # 0 < 9
     assert strip_lit(False, None, Motion.STEADY, 999) is True       # 유지=상시
-
-
-def test_subline_horn_omits_motion():
-    """경적: 방향만, '접근/이동' 문구 없음."""
-    from hud.renderer import Renderer
-    from core.types import Direction
-    from hud.viewmodel import HudView
-    horn_left = HudView(
-        emergency=True, sound_text="경적", direction=Direction.LEFT,
-        direction_text="좌측", motion_text="접근 중", subtitle="",
-        confidence=0.8, is_horn=True,
-    )
-    assert Renderer._subline(horn_left) == "좌측"      # 방향만
-    horn_unknown = HudView(
-        emergency=True, sound_text="경적", direction=Direction.UNKNOWN,
-        direction_text="방향 미상", motion_text="접근 중", subtitle="",
-        confidence=0.8, is_horn=True,
-    )
-    assert Renderer._subline(horn_unknown) == ""        # 방향 미상이면 빈 문자열
 
 
 # ── Task 4: 렌더러 통합 (STT 방향 바 / 점 애니메이션 / 멀티라인 자막) ──────
@@ -308,12 +297,13 @@ def test_emergency_horn_strip_never_dark():
         confidence=0.8, motion=Motion.APPROACHING, is_horn=True,
     )
     target = np.array(VEH_OTHER)
+    top, bot = _bar_rows()
     lit_counts = []
     for _ in range(20):                             # 한 blink 주기(18) 이상
         surf.fill((0, 0, 0))
         r._draw_emergency(surf, horn, 1280, 720)
-        # 스트립 행(중앙 y=h//2)만 검사 — 헤더의 주황 강조선/서브라인 제외
-        band = pygame.surfarray.array3d(surf).astype(int)[:, 355:410, :]
+        # 바 행만 검사 — 같은 색으로 그려지는 상태 문구를 제외한다
+        band = pygame.surfarray.array3d(surf).astype(int)[:, top:bot, :]
         lit = (np.abs(band - target).sum(axis=2) < 80)   # 차종색 점등 세그먼트
         lit_counts.append(int(lit.sum()))
     assert all(c > 0 for c in lit_counts)           # 어떤 프레임에도 소등 안 됨
@@ -390,7 +380,8 @@ def test_emergency_front_hides_bar():
                     direction_text="전방", motion_text="접근 중", subtitle="",
                     confidence=0.9, angle_deg=90.0, motion=Motion.APPROACHING)  # raw90→차량 전방
     r._draw_emergency(surf, front, 1280, 720)
-    band = pygame.surfarray.array3d(surf).astype(int)[:, 340:420, :]   # 스트립 행만
+    top, bot = _bar_rows()
+    band = pygame.surfarray.array3d(surf).astype(int)[:, top:bot, :]   # 바 행만
     lit = (np.abs(band - np.array(VEH_AMBULANCE)).sum(axis=2) < 80)
     assert lit.sum() == 0                                              # 바 숨김
 
@@ -410,7 +401,8 @@ def test_emergency_angle_positions_bar_left_vs_right():
                     direction_text="좌측", motion_text="접근 중", subtitle="",
                     confidence=0.9, angle_deg=raw, motion=Motion.APPROACHING)
         r._draw_emergency(surf, v, 1280, 720)
-        arr = pygame.surfarray.array3d(surf)[:, 340:420, :]           # 스트립 행만
+        top, bot = _bar_rows()
+        arr = pygame.surfarray.array3d(surf)[:, top:bot, :]           # 바 행만
         mask = (np.abs(arr.astype(int) - np.array(VEH_AMBULANCE)).sum(axis=2) < 60)
         xs = np.where(mask.any(axis=1))[0]
         return xs.mean() if xs.size else None
