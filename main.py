@@ -49,12 +49,37 @@ def _synth_passby(sr=SAMPLE_RATE, f0=700.0, v_kmh=60.0, d=8.0, dur=10.0, snr_db=
     return (sig + n).astype(np.float32)
 
 
+def _stt_diag(worker, state: dict) -> None:
+    """STT 워커의 지연·오류·사망을 콘솔(stderr)에만 알린다. HUD 에는 올리지 않는다.
+
+    젯슨처럼 느린 보드에서 STT 가 밀리면 자막만 조용히 안 나온다. 그게 모델이 느린
+    건지 워커가 죽은 건지 화면만 봐선 구분이 안 되므로 상태 변화를 한 번씩 찍는다.
+    state 는 호출 간 마지막 값 보관용 — 같은 상태를 매 틱 반복 출력하지 않는다.
+    """
+    if worker is None or not hasattr(worker, "status"):
+        return
+    st = worker.status()
+    error = st.get("last_error")
+    if error and error != state["error"]:
+        print(f"[stt] 오류(워커는 유지): {error}", file=sys.stderr)
+    state["error"] = error
+    dropped = int(st.get("dropped_chunks", 0))
+    if dropped > state["dropped"]:
+        print(f"[stt] 지연: 입력 {dropped - state['dropped']}개 생략", file=sys.stderr)
+    state["dropped"] = dropped
+    if not st.get("alive", True) and not state["dead"]:
+        print("[stt] 워커 스레드 종료됨 — 이후 자막 없음", file=sys.stderr)
+        state["dead"] = True
+
+
 def run_stream(chunks, stt_worker=None, hud=None) -> None:
     pipe = Pipeline(stt_worker=stt_worker)
+    stt_state = {"error": None, "dropped": 0, "dead": False}
     try:
         for i, chunk in enumerate(chunks):
             fused = pipe.process(chunk)
             print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
+            _stt_diag(stt_worker, stt_state)
             if hud is not None:
                 hud.update(fused)
                 if hud.stopped:          # HUD 창이 닫히면 파이프라인도 종료

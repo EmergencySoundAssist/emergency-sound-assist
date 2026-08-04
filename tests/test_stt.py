@@ -638,3 +638,47 @@ def test_dashboard_emergency_clears_held_caption(monkeypatch):
 
     assert any("(음성 없음)" in line for line in lines)
     assert all("긴급 전 자막" not in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# main._stt_diag — 워커 상태 변화만 콘솔(stderr)에 한 번씩 알린다
+# ---------------------------------------------------------------------------
+
+class _StatusWorker:
+    """status() 만 흉내내는 가짜 워커."""
+
+    def __init__(self, *statuses):
+        self._statuses = list(statuses)
+
+    def status(self):
+        return self._statuses.pop(0) if len(self._statuses) > 1 else self._statuses[0]
+
+
+def _st(dropped=0, error=None, alive=True):
+    return {"dropped_chunks": dropped, "last_error": error, "alive": alive}
+
+
+def test_stt_diag_reports_each_change_once(capsys):
+    import main
+
+    w = _StatusWorker(_st(), _st(dropped=3), _st(dropped=3),
+                      _st(dropped=3, error="CUDA OOM"), _st(dropped=3, error="CUDA OOM"),
+                      _st(dropped=3, error="CUDA OOM", alive=False),
+                      _st(dropped=3, error="CUDA OOM", alive=False))
+    state = {"error": None, "dropped": 0, "dead": False}
+    for _ in range(7):
+        main._stt_diag(w, state)
+
+    err = capsys.readouterr().err
+    assert err.count("지연: 입력 3개 생략") == 1      # 같은 누계는 다시 안 찍는다
+    assert err.count("오류(워커는 유지)") == 1
+    assert err.count("워커 스레드 종료됨") == 1
+
+
+def test_stt_diag_silent_without_worker(capsys):
+    import main
+
+    state = {"error": None, "dropped": 0, "dead": False}
+    main._stt_diag(None, state)                        # --stt 없이 돌 때
+    main._stt_diag(object(), state)                    # status() 없는 구형 워커
+    assert capsys.readouterr().err == ""
