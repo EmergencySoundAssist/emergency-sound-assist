@@ -25,7 +25,7 @@ def _chunk():
     return AudioChunk(samples=np.zeros(16000, dtype=np.float32))
 
 
-def test_pipeline_holds_caption_and_blocks_feed(monkeypatch):
+def test_pipeline_holds_caption_without_blocking_feed(monkeypatch):
     from pipeline import runner
     monkeypatch.setattr(
         runner, "classify",
@@ -42,8 +42,8 @@ def test_pipeline_holds_caption_and_blocks_feed(monkeypatch):
     clock["t"] = 1.0
     r1 = pipe.process(_chunk())
     assert r1.speech is not None and r1.speech.text == "비켜주세요"   # 3초 유지
-    assert w.feeds == 1                                              # 표시 중 입력 차단
+    assert w.feeds == 2                                              # 유지 중에도 계속 먹인다
 
     clock["t"] = 3.0
     pipe.process(_chunk())
-    assert w.feeds == 2                                              # 만료 후 feed 재개
+    assert w.feeds == 3
