@@ -38,6 +38,33 @@ _KO_MOTION = {
     Motion.UNKNOWN: "이동 미상",
 }
 
+# 게이지(시작 음량 대비 상승분) → 접근 중에 쓸 거리 문구의 경계.
+_GAUGE_NEAR = 0.75
+_GAUGE_MID = 0.35
+
+
+def _proximity_text(label, gauge, motion) -> Optional[str]:
+    """화면에 띄울 거리 문구.
+
+    detector 의 proximity 는 '이벤트 최고 음량(=최근접) 대비' 값이라, 최근접을
+    지나기 전에는 기준점이 없어 None 이다. 그런데 거리가 가장 궁금한 구간이
+    바로 다가오는 동안이다. 그 구간에서는 게이지(시작 음량 대비 상승분)로
+    문구를 만든다 — 기준점만 다를 뿐 둘 다 '얼마나 가까워졌나'를 잰다.
+
+    다만 '최근접'은 최고점이 확정된 뒤에만 쓴다. 접근 중에는 아무리 가까워도
+    '근접'까지만 말한다 — 아직 더 가까워질 수 있기 때문이다.
+
+    ⚠ 어느 쪽도 미터가 아니다. 마이크 하나로는 음원의 절대 음압을 모르므로
+    절대 거리를 낼 수 없다(docs/approach/design.md).
+    """
+    if label is not None:
+        return label                      # 최근접을 지난 뒤 — 최고점 대비 값
+    if gauge is None or motion is not Motion.APPROACHING:
+        return None
+    if gauge >= _GAUGE_NEAR:
+        return "근접"
+    return "근거리" if gauge >= _GAUGE_MID else "원거리"
+
 
 @dataclass
 class HudView:
@@ -57,6 +84,9 @@ class HudView:
     # 상대 근접도 라벨. '최근접/근거리/원거리' — 절대 거리(m)가 아니라 이벤트 내
     # 가장 컸던 순간 대비 위치다. 미터로 읽히지 않게 화면에서도 그대로 쓴다.
     proximity: Optional[str] = None
+    # 최근접 대비 거리비(≥1.0). 최고점을 지난 뒤에만 값이 있다 — 기준점이 그때
+    # 확정되기 때문. 접근 중에는 None 이고, 이것도 미터가 아니다.
+    rel_distance: Optional[float] = None
 
     def approach_motion(self) -> Motion:
         """렌더러가 blink 판단에 쓰는 원본 Motion 접근자."""
@@ -75,7 +105,8 @@ class HudView:
         angle_deg = fused.direction.angle_deg
         speed_level = getattr(fused.approach, "speed_level", None)
         gauge = getattr(fused.approach, "gauge", None)
-        proximity = getattr(fused.approach, "proximity", None)
+        proximity = _proximity_text(
+            getattr(fused.approach, "proximity", None), gauge, fused.approach.motion)
         is_horn = s.label is SoundClass.HORN
         return cls(
             emergency=s.is_emergency,
@@ -91,4 +122,5 @@ class HudView:
             is_horn=is_horn,
             gauge=gauge,
             proximity=proximity,
+            rel_distance=getattr(fused.approach, "rel_distance", None),
         )

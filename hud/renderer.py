@@ -201,7 +201,14 @@ class Renderer:
         else:
             line = view.motion_text
         prox = getattr(view, "proximity", None)
-        return f"{line} · {prox}" if prox else line
+        if prox:
+            line = f"{line} · {prox}"
+        # 거리비는 최근접을 지난 뒤에만 값이 있다. '최근접 대비'를 붙여 미터로
+        # 읽히지 않게 하고, 10배를 넘으면 자릿수 대신 상한으로 잘라 말한다.
+        rel = getattr(view, "rel_distance", None)
+        if rel is not None and rel >= 1.0:
+            line += "  최근접 대비 10배+" if rel >= 10.0 else f"  최근접 대비 {rel:.1f}배"
+        return line
 
     def _draw_normal(self, surface, view, w, h):
         self._frame = (self._frame + 1) % 100000
