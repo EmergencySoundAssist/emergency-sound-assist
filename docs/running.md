@@ -191,3 +191,76 @@ python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
 | TensorRT가 목록에 없음 | Jetson용 ONNX Runtime/TensorRT 빌드가 아닌 CPU 패키지일 수 있음 |
 | 차종이 표시되지 않음 | 사이렌 확정 여부와 `subtype_cnn_attn_yt_s42.onnx` 존재 확인 |
 | 시작 직후 결과가 불안정 | 검출·차종·움직임 모델의 5초 창이 아직 채워지는 중 |
+| `[ble] bleak이 없습니다` | `pip install bleak` |
+| BLE가 계속 재연결만 반복 | 폰 GATT 서버가 켜져 있는지, 서비스 UUID가 같은지 확인 |
+| 맥에서 `--ble` 이 종료코드 134로 즉사 | macOS TCC 제약. 코드 문제 아님 — 아래 10절 참고. BLE는 젯슨에서 검증 |
+
+## 10. BLE 전송 (`--ble`)
+
+Jetson이 BLE 클라이언트(중앙기기)로 동작해 폰(GATT 서버)에 4바이트를 write 하고, 폰이 워치로
+미러링해 진동시킨다. 워치에 직접 연결하지 않는다.
+
+```bash
+sudo apt install -y bluez
+pip install bleak
+```
+
+폰의 GATT 서버를 서비스 UUID로 자동 검색한다. `--hud` 와 함께 쓸 수 있다 — 화면과 진동이 같은
+판정을 본다.
+
+```bash
+python main.py --mic --channels 6 --ble
+python main.py --mic --channels 6 --stt --stt-model small --hud --ble
+```
+
+자동 검색이 느리거나 실패하면 MAC을 직접 준다. 더 빠르고 확실하다.
+
+```bash
+python main.py --mic --channels 6 --ble --watch-mac AA:BB:CC:DD:EE:FF
+```
+
+먼저 하드웨어 없이 전송 경로만 확인할 수 있다.
+
+```bash
+python main.py --demo --ble
+```
+
+페이로드는 4바이트 고정이며 `notify/protocol.py`와 폰쪽 `AlertProtocol.kt`가 **반드시 같아야
+한다**. 한쪽만 바꾸면 폰이 값을 잘못 읽는다.
+
+| 바이트 | 의미 | 값 |
+|---|---|---|
+| 0 | 소리 | 0=일반, 1=사이렌, 2=경적 |
+| 1 | 방향 | 0=전방, 1=후방, 2=좌, 3=우, 0xFF=미상 |
+| 2 | 움직임 | 0=접근, 1=멀어짐, 2=유지, 0xFF=미상 |
+| 3 | 신뢰도 | 0~100 |
+
+동작 특성:
+
+- 소리 종류는 매 청크 원시 분류가 아니라 **잔향으로 눌러진 판정**을 따른다
+  (`pipeline.runner.Pipeline._debounce`, 기본 2초). 켜는 쪽은 즉시, 끄는 쪽만 늦춘다 —
+  경보 지연은 안전 문제이고, 사이렌 유지 중 분류가 한두 청크 튀어도 진동이 끊기면 안 된다.
+  긴급이 끝나 잔향이 만료되면 `0`을 보내 폰이 진동을 멈춘다.
+- 직전과 같은 상황(앞 3바이트)은 보내지 않는다. 신뢰도만 흔들려도 재전송하지 않는다 —
+  폰이 write 마다 진동을 끊고 다시 재생해서 방향 리듬이 잘리기 때문이다.
+- 큐는 최신 1건만 유지하고 Write Without Response를 쓴다(지연 최소화).
+- 연결은 시작 시 1회 맺고 끊기면 자동 재연결한다. 매 전송마다 스캔하지 않는다.
+- **파이썬 수준** BLE 실패(스캔 실패·연결 끊김·write 오류)는 감지 파이프라인을 멈추지 않는다.
+  전송만 조용히 생략된다. 단 BLE 스택이 네이티브 수준에서 프로세스를 죽이면 파이썬이 막을 수
+  없다 — 맥 개발 환경이 실제로 그렇다(바로 아래). 젯슨 실기에서 `--ble` 붙인 채로 HUD가
+  끝까지 도는지 반드시 확인해야 하는 이유다.
+
+### 맥에서 `--ble` 은 검증할 수 없다
+
+맥에서 `--ble` 을 켜면 파이썬 예외 없이 프로세스가 **SIGABRT(134)** 로 죽는다. macOS TCC가
+`Info.plist` 에 `NSBluetoothAlwaysUsageDescription` 이 없는 바이너리의 CoreBluetooth 접근을
+차단하기 때문이고, venv/conda 의 맨 `python` 에는 그 plist 가 없다. 메인 스레드에서 직접
+`BleakScanner.discover()` 를 돌려도 같으므로 우리 코드의 스레딩 문제가 아니다.
+
+젯슨(Linux)은 BlueZ 를 D-Bus 로 쓰므로 이 제약이 없다. **BLE 전송 경로는 젯슨에서만 실기
+검증한다.** 맥에서는 `pytest tests/test_notify.py` 로 인코딩·중복억제 로직까지만 확인한다.
+- 방향 리듬·움직임 세기는 **폰 진동에서만** 재현된다. 워치는 알림 미러링이라 상황이 바뀔
+  때마다 기본 진동 1회를 받는다(= 변화 표시). 커스텀 패턴은 Wear OS 워치로 바꿔
+  `watch-app`을 설치할 때 되살아난다.
+- 움직임 바이트는 조건부 융합 결과다. **속도 단계는 보내지 않는다** —
+  공개 데이터 검증에서 기준선 이하였다([검증 문서](approach/validation.md)).

@@ -32,6 +32,7 @@ import numpy as np
 
 from core.types import (
     AudioChunk,
+    ClassResult,
     FusedResult,
     DirectionResult,
     ApproachResult,
@@ -58,8 +59,12 @@ class Pipeline:
         self,
         stt_worker: Optional["object"] = None,
         hold_seconds: float = 3.0,
+        emergency_hangover: float = 2.0,
         clock=None,
     ) -> None:
+        self._hangover = float(emergency_hangover)
+        self._hold_until = 0.0
+        self._last_emergency: Optional[ClassResult] = None
         self._approach = ApproachDetector()
         # 조건부 C 융합: 음량 추세 · 속도방향 모델 · 직접 도플러를 상황별로 골라 쓴다.
         # 창은 약 1.5초 — 청크가 1초이므로 3틱. HUD 가 보는 motion 이 이 결과다.
@@ -71,7 +76,7 @@ class Pipeline:
 
     def process(self, chunk: AudioChunk) -> FusedResult:
         mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
-        cls = classify(mono_chunk)
+        cls = self._debounce(classify(mono_chunk))
         speech: Optional[SpeechResult] = None
 
         if cls.is_emergency:                     # ── 긴급: 경고 집중, STT 멈춤 ──
@@ -96,6 +101,28 @@ class Pipeline:
                 speech = self._caption.update(self._stt, mono_chunk, self._now())
 
         return FusedResult(sound=cls, direction=direction, approach=approach, speech=speech)
+
+    def _debounce(self, raw: ClassResult) -> ClassResult:
+        """분류 깜빡임을 잔향으로 메운다 — 켜기는 즉시, 끄기는 hangover 후.
+
+        사이렌이 이어지는 중에도 분류가 한두 청크 'normal' 로 튀면, 화면은 눈이
+        무시하지만 폰 진동(notify.BleSender)은 끊김을 몸이 바로 느낀다. 긴급이 사라진
+        뒤 hangover 동안은 마지막 긴급 판정을 그대로 유지한다(차종·신뢰도 포함).
+
+        켜는 쪽은 절대 늦추지 않는다 — 경보 지연은 안전 문제다.
+
+        ponytail: 잔향 타이머만 둔다. pipeline.alert.Gate 가 투표창·리마인더까지 있는
+        완성형이지만 로짓 마진과 0.15초 tick 을 전제해서(여기는 확률·1초 청크) 안 맞는다.
+        마진을 FusedResult 까지 끌어오게 되면 그때 Gate 로 갈아탄다.
+        """
+        if raw.is_emergency:
+            self._hold_until = self._now() + self._hangover
+            self._last_emergency = raw
+            return raw
+        if self._last_emergency is not None and self._now() < self._hold_until:
+            return self._last_emergency
+        self._last_emergency = None
+        return raw
 
     def _fuse(self, acoustic: ApproachResult) -> ApproachResult:
         """음량 판단에 속도방향 모델과 직접 도플러를 조건부로 얹어 motion 을 확정한다.
