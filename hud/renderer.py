@@ -20,14 +20,13 @@ from hud.card import Layout
 BG = (10, 10, 11)
 FG = (245, 245, 245)
 MUTED = (90, 90, 94)
-ALERT = (226, 75, 74)      # 긴급(빨강)
 WARN = (239, 159, 39)      # 접근·보조(주황)
 DIM = (35, 35, 38)
 
 # 차종별 색 (LED 카드)
 VEH_AMBULANCE = (51, 220, 90)     # 구급차 초록
 VEH_POLICE = (60, 130, 246)       # 경찰차 파랑
-VEH_FIRE = (226, 75, 74)          # 소방차 빨강(=ALERT)
+VEH_FIRE = (226, 75, 74)          # 소방차 빨강(긴급색)
 VEH_OTHER = (239, 159, 39)        # 기타/경적 주황(=WARN)
 
 

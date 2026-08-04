@@ -1,7 +1,7 @@
 """HUD LED 카드의 순수 계산 로직 (pygame 의존 없음 → 단위테스트 용이).
 
-방향각/이산방향 → 세그먼트 위치, 접근 빠르기 → blink 주기, 세그먼트 밝기 감쇠.
-데이터가 없을 때(angle None / speed None)의 성능저하 규칙도 여기서 결정한다.
+방향각/이산방향 → 세그먼트 위치, 음압 강도 → 미터·글로우·퍼지는 깜빡임(ripple)
+주기, 세그먼트 밝기 감쇠. 데이터가 없을 때(angle None)의 폴백 규칙도 여기서 결정한다.
 """
 from __future__ import annotations
 
@@ -26,33 +26,6 @@ def direction_to_index(angle_deg: Optional[float], direction: Direction, n: int 
     if direction is Direction.RIGHT:
         return n - 1 - n // 4
     return mid                                         # FRONT/REAR/UNKNOWN → 중앙
-
-
-# speed_level 1~5 → blink 주기 프레임(느림 30 ~ 빠름 9), 라벨
-_SPEED_LABEL = {5: "빠르게", 4: "빠르게", 3: "보통", 2: "느리게", 1: "느리게"}
-_SPEED_PERIOD = {5: 9, 4: 12, 3: 18, 2: 24, 1: 30}
-
-
-def blink_spec(speed_level: Optional[int], motion: Motion) -> Tuple[str, int]:
-    """(라벨, blink 주기프레임). 주기 0 = 상시점등(깜빡임 없음).
-
-    speed_level 있으면 1~5로 정밀 매핑. 없으면 Motion 폴백:
-    접근=보통(18) blink, 멀어짐/유지/미상=상시(0).
-    """
-    if speed_level is not None:
-        lv = max(1, min(5, speed_level))
-        return (_SPEED_LABEL[lv], _SPEED_PERIOD[lv])
-    if motion is Motion.APPROACHING:
-        return ("접근 중", 18)
-    labels = {Motion.RECEDING: "멀어짐", Motion.STEADY: "유지", Motion.UNKNOWN: "이동 미상"}
-    return (labels.get(motion, "이동 미상"), 0)
-
-
-def is_lit_now(period_frames: int, frame_count: int) -> bool:
-    """blink 현재 on/off. 주기 0이면 항상 on. 앞 절반 on, 뒤 절반 off."""
-    if period_frames <= 0:
-        return True
-    return (frame_count % period_frames) < (period_frames / 2.0)
 
 
 def segment_brightness(seg_index: int, center_index: int, radius: int = 2) -> float:
@@ -131,23 +104,6 @@ def dots_brightness(frame: int, count: int = 3, period: int = 24) -> List[float]
     return out
 
 
-def strip_lit(
-    is_horn: bool,
-    speed_level: Optional[int],
-    motion: Motion,
-    frame: int,
-) -> bool:
-    """이번 프레임에 방향 LED 스트립을 켤지 여부.
-
-    경적은 '접근 여부'를 출력하지 않으므로 깜빡이지 않고 상시 점등한다.
-    그 외에는 기존 blink 규칙(blink_spec 주기 + is_lit_now)을 따른다.
-    """
-    if is_horn:
-        return True
-    _, period = blink_spec(speed_level, motion)
-    return is_lit_now(period, frame)
-
-
 def azimuth_to_bar_index(raw_deg: float, n: int = 15) -> Optional[int]:
     """raw DoA 방위각 → 가로 바 인덱스(0=좌 ~ n-1=우). 전방이면 None(숨김).
 
@@ -170,36 +126,9 @@ def direction_visible(direction: Direction) -> bool:
     return direction is not Direction.FRONT
 
 
-# ── 접근 빠르기(speed_level) → 퍼짐 반경 · 퍼지는 깜빡임(ripple) ─────────────
-RIPPLE_PERIOD = 16          # 퍼짐 깜빡임 한 주기 프레임 수(@30fps). 디자인 확정값.
-
-# 근접도 게이지(0~1) → 점등 클러스터 반경. 가까울수록 넓게 = "거리에 따라 범위가 넓어짐".
-# 게이지 없음(접근 아님/미상/경적)이면 기본 반경 3.
-def spread_for_gauge(gauge: Optional[float]) -> int:
-    """근접 게이지(0.0~1.0) → 퍼짐 반경 2~6. None 이면 기본 3."""
-    if gauge is None:
-        return 3
-    return int(round(2 + max(0.0, min(1.0, gauge)) * 4))    # 0→2(멀리) … 1→6(최근접)
-
-
+# ── 퍼지는 깜빡임(ripple) 상수 · should_ripple ──────────────────────────────
 RIPPLE_PERIOD_FAR = 28      # 멀 때 한 주기 프레임(@30fps) ≈ 0.93초 → 0.9 Hz
 RIPPLE_PERIOD_NEAR = 11     # 최근접 ≈ 0.37초 → 2.7 Hz
-
-
-def ripple_period_for_gauge(gauge: Optional[float]) -> int:
-    """근접 게이지(0.0~1.0) → 퍼짐 한 주기 프레임 수. 가까울수록 짧다(=빨리 퍼진다).
-
-    폭(spread_for_gauge)과 속도를 같은 게이지에 묶어, 가까워질수록 넓고 빠르게
-    퍼지게 한다. 운전자는 숫자를 읽지 않고 '리듬'으로 거리를 느낀다.
-
-    하한 11프레임(≈2.7 Hz)은 광과민성 안전선이다. 초당 3회를 넘는 점멸은 발작을
-    유발할 수 있어(WCAG 2.3.1 기준) 아무리 가까워도 그 아래로 내려가지 않는다.
-    게이지가 없으면(접근 아님·미상·경적) 중간값을 쓴다.
-    """
-    if gauge is None:
-        return (RIPPLE_PERIOD_FAR + RIPPLE_PERIOD_NEAR) // 2
-    g = max(0.0, min(1.0, gauge))
-    return int(round(RIPPLE_PERIOD_FAR - g * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))
 
 
 def should_ripple(is_horn: bool, motion: Motion) -> bool:
@@ -209,7 +138,7 @@ def should_ripple(is_horn: bool, motion: Motion) -> bool:
 
 def ripple_brightness(
     seg_index: int, center_index: int, radius: float,
-    frame: int, period: int = RIPPLE_PERIOD,
+    frame: int, period: int = RIPPLE_PERIOD_FAR,
 ) -> float:
     """퍼지는 깜빡임의 세그먼트 밝기(0~1).
 
