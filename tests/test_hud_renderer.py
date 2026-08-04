@@ -87,7 +87,8 @@ def test_meter_fills_more_for_a_louder_sound():
 
     def filled(spl):
         surf = _render(_view(level_db=spl, level_text=f"{spl:.0f}"))
-        return sum(1 for x in range(1280) if sum(surf.get_at((x, row))[:3]) > 90)
+        return sum(1 for x in range(lo.bar_x, 1280)
+                   if sum(surf.get_at((x, row))[:3]) > 150)
 
     assert filled(97.0) > filled(66.0) > 0
 

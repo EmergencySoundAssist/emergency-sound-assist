@@ -22,7 +22,6 @@ FG = (245, 245, 245)
 MUTED = (90, 90, 94)
 ALERT = (226, 75, 74)      # 긴급(빨강)
 WARN = (239, 159, 39)      # 접근·보조(주황)
-PANEL = (20, 20, 22)       # 패널 바닥 = 음압 미터의 빈 트랙(채운 부분과 확실히 구분)
 DIM = (35, 35, 38)
 
 # 차종별 색 (LED 카드)
@@ -141,7 +140,7 @@ class Renderer:
         if front:
             self._draw_bar(surface, color, 0, t, lit=False)
             mark = self._f_unit.render("▲ 전방", True, color)
-            x0, total = self._bar_span()
+            x0, total, _, _ = self._bar_span()
             # 칸 '위'에 띄운다 — 칸을 덮으면 고정 그리드가 깨져 보인다.
             # 간격도 Layout(칸 높이)에서 나온다: 화면이 커지면 같이 벌어진다.
             surface.blit(mark, mark.get_rect(
@@ -173,19 +172,21 @@ class Renderer:
         return hud_card.direction_to_index(None, view.direction, self._lo.seg_n)
 
     def _bar_span(self):
-        """칸 시작 x 와 전체 폭. 상태와 무관하게 항상 같은 값."""
+        """칸 피치(칸 폭·간격)의 유일한 계산처 — x0, 전체 폭, 칸 폭, 간격.
+
+        여기서만 계산해야 한다: 두 곳에서 따로 계산하면 한쪽만 바뀔 때 칸과
+        L/R 라벨이 어긋난다.
+        """
         lo = self._lo
         seg_w = int(lo.bar_w / (lo.seg_n + (lo.seg_n - 1) * 0.28))
         gap = int(seg_w * 0.28)
         total = lo.seg_n * seg_w + (lo.seg_n - 1) * gap
-        return lo.bar_x + (lo.bar_w - total) // 2, total
+        return lo.bar_x + (lo.bar_w - total) // 2, total, seg_w, gap
 
     def _draw_bar(self, surface, color, center, t, lit=True, ripple=False):
         """고정 그리드 LED. 칸의 위치·크기는 불변, 밝기만 바뀐다."""
         lo = self._lo
-        x0, total = self._bar_span()
-        seg_w = int(lo.bar_w / (lo.seg_n + (lo.seg_n - 1) * 0.28))
-        gap = int(seg_w * 0.28)
+        x0, total, seg_w, gap = self._bar_span()
         y = lo.bar_cy - lo.seg_h // 2
         glow = hud_card.spl_to_glow(t)
         period = hud_card.ripple_period_for_spl(t)
@@ -199,16 +200,17 @@ class Renderer:
                 b = hud_card.segment_brightness(i, center, SPREAD)
             _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, lo.seg_h,
                           color, b, glow)
+        label_gap = lo.margin // 3   # margin 의 1/3 — 1280px 기준 기존 24px 그대로
         ll = self._f_unit.render("L", True, MUTED)
-        surface.blit(ll, (x0 - ll.get_width() - 24, lo.bar_cy - ll.get_height() // 2))
+        surface.blit(ll, (x0 - ll.get_width() - label_gap, lo.bar_cy - ll.get_height() // 2))
         rl = self._f_unit.render("R", True, MUTED)
-        surface.blit(rl, (x0 + total + 24, lo.bar_cy - rl.get_height() // 2))
+        surface.blit(rl, (x0 + total + label_gap, lo.bar_cy - rl.get_height() // 2))
 
     def _draw_meter(self, surface, color, t):
         """음압 고정 트랙 미터. 트랙 길이는 불변, 채워지는 길이만 변한다."""
         lo = self._lo
-        x0, total = self._bar_span()
-        pygame.draw.rect(surface, PANEL, (x0, lo.meter_y, total, lo.meter_h),
+        x0, total, _, _ = self._bar_span()
+        pygame.draw.rect(surface, DIM, (x0, lo.meter_y, total, lo.meter_h),
                          border_radius=6)
         if t > 0:
             pygame.draw.rect(surface, color,
