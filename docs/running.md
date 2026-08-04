@@ -229,8 +229,8 @@ python main.py --mic --channels 6 --ble --watch-mac AA:BB:CC:DD:EE:FF
 python main.py --demo --ble
 ```
 
-페이로드는 4바이트 고정이며 `notify/protocol.py`와 워치쪽 `AlertProtocol.kt`가 **반드시 같아야
-한다**. 한쪽만 바꾸면 워치가 값을 잘못 읽는다.
+페이로드는 4바이트 고정이며 `notify/protocol.py`와 폰쪽 `AlertProtocol.kt`가 **반드시 같아야
+한다**. 한쪽만 바꾸면 폰이 값을 잘못 읽는다.
 
 | 바이트 | 의미 | 값 |
 |---|---|---|
@@ -247,5 +247,8 @@ python main.py --demo --ble
 - 큐는 최신 1건만 유지하고 Write Without Response를 쓴다(지연 최소화).
 - 연결은 시작 시 1회 맺고 끊기면 자동 재연결한다. 매 전송마다 스캔하지 않는다.
 - BLE 실패가 감지 파이프라인을 멈추지 않는다. 전송만 조용히 생략된다.
+- 방향 리듬·움직임 세기는 **폰 진동에서만** 재현된다. 워치는 알림 미러링이라 상황이 바뀔
+  때마다 기본 진동 1회를 받는다(= 변화 표시). 커스텀 패턴은 Wear OS 워치로 바꿔
+  `watch-app`을 설치할 때 되살아난다.
 - 움직임 바이트는 조건부 융합 결과다. **속도 단계는 보내지 않는다** —
   공개 데이터 검증에서 기준선 이하였다([검증 문서](approach/validation.md)).

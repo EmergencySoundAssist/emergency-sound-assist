@@ -1,6 +1,7 @@
 """
-Jetson = BLE 클라이언트(중앙기기). 워치(GATT 서버)를 찾아 **연결을 계속 유지**하며
-protocol.encode_alert() 가 만든 4바이트를 write 한다.
+Jetson = BLE 클라이언트(중앙기기). 폰 앱(GATT 서버)을 찾아 **연결을 계속 유지**하며
+protocol.encode_alert() 가 만든 4바이트를 write 한다. 폰이 알림을 띄우면 워치가
+알림 미러링으로 진동한다 — 워치에 직접 연결하지 않는다.
 
 설계 (요구사항 ③ 지연 최소화):
   - 연결은 시작 시 1회 → 끊기면 자동 재연결. 매 전송마다 스캔/연결하지 않음.
@@ -11,8 +12,8 @@ main.py 는 동기 루프라, 여기선 백그라운드 스레드에서 asyncio 
 send() 는 그 루프로 페이로드를 넘기는 '동기 → 비동기' 다리 역할만 한다.
 
 사용:
-  sender = BleSender()              # 서비스 UUID로 워치 자동 검색
-  sender = BleSender(address="AA:BB:..")  # 또는 워치 MAC 직접 지정(더 빠름/확실)
+  sender = BleSender()              # 서비스 UUID로 폰 자동 검색
+  sender = BleSender(address="AA:BB:..")  # 또는 폰 MAC 직접 지정(더 빠름/확실)
   sender.start()
   ...  sender.send_alert(ev, info)  ...
   sender.close()
@@ -71,8 +72,11 @@ class BleSender:
         """
         # 상황 3바이트(소리·방향·움직임)가 같으면 보내지 않는다.
         # 신뢰도(byte3)까지 비교하면 매 tick 1%씩 흔들려 중복 제거가 무력화되고,
-        # 워치가 write 마다 vibrator.cancel() 후 재생하므로 방향 리듬(640~920ms)이
-        # 매번 잘려 좌측↔전방·우측↔후방이 구분되지 않는다. (watch-app VibrationEngine)
+        # 폰이 write 마다 vibrator.cancel() 후 재생하므로 방향 리듬(640~920ms)이
+        # 매번 잘려 좌측↔전방·우측↔후방이 구분되지 않는다.
+        # (phone-app notify/AlertNotifier.kt 의 vibratePhone)
+        # 워치는 알림 미러링이라 이 파형 대신 기본 진동 1회를 받는다. 따라서 워치 입장에선
+        # '상황이 바뀔 때마다 한 번' 울리는 변화 표시가 된다 — 실기기에서 확인함.
         if self._last is not None and payload[:3] == self._last[:3]:
             return
         loop = self._loop
@@ -129,10 +133,10 @@ class BleSender:
 
         while not self._stop:
             try:
-                log.info("워치 스캔 중…")
+                log.info("폰 스캔 중…")
                 device = await self._find_device()
                 if device is None:
-                    log.warning("워치를 찾지 못함 — 재시도")
+                    log.warning("폰을 찾지 못함 — 재시도")
                     await asyncio.sleep(self._reconnect_delay)
                     continue
 

@@ -1,7 +1,7 @@
 """BLE 페이로드 인코딩 회귀 테스트.
 
-바이트 포맷은 워치쪽 AlertProtocol.kt 와 반드시 같아야 하므로, 값이 바뀌면
-워치 앱도 함께 고쳐야 한다는 뜻으로 여기서 고정한다.
+바이트 포맷은 폰쪽 AlertProtocol.kt 와 반드시 같아야 하므로, 값이 바뀌면
+폰 앱도 함께 고쳐야 한다는 뜻으로 여기서 고정한다.
 """
 
 from core.types import Direction, Motion
@@ -14,8 +14,8 @@ def _info(direction=None, motion=None, conf=0.0) -> dict:
     return {"direction": direction, "motion": motion, "conf": conf}
 
 
-def test_uuid는_워치와_합의된_값이다():
-    # 한 글자라도 바뀌면 워치가 장치를 못 찾는다.
+def test_uuid는_폰과_합의된_값이다():
+    # 한 글자라도 바뀌면 젯슨이 폰을 못 찾는다.
     assert SERVICE_UUID == "e7a10000-2c5f-4b9a-8d3e-1f0a9b8c7d60"
     assert ALERT_CHAR_UUID == "e7a10001-2c5f-4b9a-8d3e-1f0a9b8c7d60"
 
@@ -86,7 +86,7 @@ class _SpySender(BleSender):
 
 
 def test_신뢰도만_바뀌면_전송하지_않는다():
-    # 신뢰도는 매 tick 흔들린다. 이걸 보내면 워치가 진동 파형을 매번 restart 해서
+    # 신뢰도는 매 tick 흔들린다. 이걸 보내면 폰이 진동 파형을 매번 restart 해서
     # 방향 리듬(640~920ms)이 잘리고 좌측↔전방이 구분되지 않는다.
     s = _SpySender()
     for conf in (80, 81, 82, 83, 84):
