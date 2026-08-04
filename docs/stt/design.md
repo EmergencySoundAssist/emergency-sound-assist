@@ -1,97 +1,86 @@
-# STT(음성→텍스트) 설계  *(확장 기능 — 담당: 천자민)*
+# STT(음성→텍스트) 설계
 
-> 목표: 오디오 → **텍스트** → `core.types.SpeechResult` 반환
-> 구현 파일: [`stt/transcriber.py`](../../stt/transcriber.py) — `Transcriber.transcribe(chunk) → SpeechResult`
+목표는 평상시 주변 말을 `SpeechResult` 자막으로 바꾸는 것이다. 사이렌·경적 검출과
+차종·방향·접근 판단에는 관여하지 않는다.
 
-청각장애 운전자는 사이렌·경적뿐 아니라 **사람의 말**도 못 듣는다.
-경찰 확성기("차 세우세요"), 옆 차/행인의 외침, 안내방송 등을
-**텍스트로 바꿔 보여 주면** 상황을 더 빨리 알 수 있다.
+## 전체 흐름
 
-분류(siren/horn, ① 모듈) 와 달리 STT 는 **말의 내용**을 텍스트로 옮길 뿐이다.
-(긴급 여부 판단은 ① 분류 모듈의 몫 — STT 는 텍스트만 책임진다.)
-
----
-
-## 처리 흐름
-
-```
-AudioChunk(1초) 흐름
-   │
-   ├─ 무음 게이트(VAD): RMS 에너지 < 임계 → 버림 (엔진 안 돌림, 비용 절약)
-   │
-   └─ 음성이면 버퍼에 누적 ──┐
-        · 무음이 이어지면(발화 끝) │ → 모은 발화를 STT 엔진에 한 번에 인식
-        · 또는 최대 길이 초과 ─────┘
-                  │
-                  ▼
-        텍스트 → SpeechResult
+```text
+마이크 ch0 → 1초 묶음 → 외부 Silero VAD
+                         ├─ 비음성: 버림
+                         └─ 음성: 발화 버퍼(최대 8초)
+                                      ↓ 발화 종료
+                           faster-whisper medium
+                           + 내부 Silero VAD
+                           + 환각 임계값
+                                      ↓
+                         신뢰도 0.4 이상만 SpeechResult
 ```
 
-- **왜 버퍼링?** 1초 청크는 STT 에 너무 짧다. 음성이 이어지는 동안 모았다가
-  **발화 단위**로 인식해야 문장이 제대로 나온다. → `ApproachDetector` 처럼 상태를 가진 클래스.
-- **왜 VAD(무음 게이트)?** 도로는 대부분 '말 없는' 구간. 조용할 때 엔진을 안 돌리면 연산을 크게 아낀다.
+Silero를 불러올 수 없을 때만 WebRTC, 그다음 energy VAD로 폴백한다. 외부 VAD는 발화의
+시작과 끝을 정해 불필요한 디코딩을 줄이고, 내부 VAD와 신뢰도 필터는 외부 VAD를 통과한
+도로소음의 오자막을 막는다.
 
----
+## 긴급 경보와 STT의 관계
 
-## 2단계 전략
+분류기가 사이렌·경적을 활성화하면 STT보다 긴급 경보를 우선한다.
 
-### 1단계 (MVP): faster-whisper + 에너지 VAD
-- 엔진: **faster-whisper**(CTranslate2 기반) — 오프라인·CPU 동작·한국어 지원·Jetson 이식 가능.
-- VAD: 청크 RMS 에너지 임계값(간단·의존성 0). `config.vad_rms_threshold`.
-- 인식 품질: 발화 단위 버퍼링 + Whisper 전 RMS 정규화 + 환각 가드 임계값.
-- 장점: 의존성 한 개, 코드 짧음. 한계: 도로 소음에서 인식률·VAD 민감도 튜닝 필요.
+- 평상시: 1초 오디오를 워커에 전달하고 완성된 자막을 가져온다.
+- 자막 표시: 완성된 마지막 자막을 대시보드에서 5초 유지하고, 새 자막이 오면 즉시 교체한다.
+- 긴급 진입: 한 번만 `reset()`하고 긴급 중에는 오디오를 전달하지 않는다.
+- 긴급 유지: 매 tick reset하지 않는다.
+- 긴급 해제: 새 세대의 음성부터 다시 수집한다.
 
-### 2단계 (개선, 필요시)
-- **VAD 고도화**: 에너지 임계 → webrtcvad / Silero VAD 로 교체(노이즈에 강함).
-- **스트리밍 인식**: 발화 끝까지 기다리지 않고 부분 결과를 더 빨리 표시.
-- **Jetson 가속**: `device="auto"` 가 CUDA 자동 감지(cuda/float16). 배포·의존성 충돌 → [jetson.md](jetson.md).
-- **DoA 연계**: ② 방향 결과와 합쳐 "후방에서 누군가 말함" 처럼 말의 **방향**까지 표시.
+`STTWorker`의 세대 번호는 reset 시 즉시 증가한다. 따라서 reset 전에 큐에 있던 입력,
+이미 변환 중이던 결과, 아직 소비하지 않은 최신 자막은 모두 폐기된다. STT가 느려도
+분류·방향·접근 루프는 백그라운드 인식 때문에 멈추지 않는다.
 
-> ⚠️ **먼저 1단계로 인식·VAD 품질 측정 → 부족하면 2단계.** (과잉설계 방지)
+워커의 `latest()`는 완성 자막을 한 번만 전달한다. 콘솔은 이를 새 로그로 한 번 출력하고,
+대시보드는 별도의 표시 캐시에 5초 보관한다. 사이렌·경적 진입 시 이 표시 캐시도 즉시 지워
+오래된 평상시 자막이 긴급 화면 뒤에 다시 나타나지 않게 한다.
 
----
+## 오류와 과부하 처리
 
-## 엔진 교체 포인트
-`Transcriber(engine=...)` 로 엔진을 주입할 수 있다. `_Engine` 프로토콜
-(`transcribe(samples, sr) → (text, confidence, lang)`)만 지키면
-faster-whisper 를 vosk 등으로 바꿔도 나머지 코드는 그대로다.
-테스트는 가짜 엔진을 주입해 **faster-whisper 없이** 돌아간다.
+- 엔진 예외는 워커를 종료시키지 않고 `last_error`로 공개한다.
+- 다음 성공 시 오류 상태를 지운다.
+- 큐가 가득 차면 오래 지연된 오디오를 쌓지 않고 새 청크를 생략하며
+  `dropped_chunks`를 증가시킨다.
+- 콘솔과 대시보드는 오류와 누적 드롭을 표시한다.
 
----
+정확성보다 최신성이 중요한 실시간 보조장치이므로, 밀린 음성을 수십 초 뒤에 자막으로
+내보내는 대신 드롭을 관측 가능하게 만든 선택이다.
 
-## 설정 (`stt/config.py`)
-| 항목 | 기본값 | 의미 |
-|------|--------|------|
-| `model_size` | small | tiny/base/small… (클수록 정확·느림). 한국어는 small 최소 |
-| `language` | ko | None 이면 자동 감지 |
-| `device` / `compute_type` | auto | 노트북=cpu/int8, Jetson(GPU)=cuda/float16 자동 |
-| `vad_rms_threshold` | 0.005 | 이 이상 RMS 면 음성으로 간주(낮춰서 범위↑) |
-| `normalize_audio` | True | Whisper 전 RMS 정규화(먼/조용한 음성 살림) |
-| `max_utterance_seconds` | 8.0 | 한 발화 최대 길이(넘으면 강제 인식) |
-| `silence_release_chunks` | 1 | 음성 뒤 무음이 이만큼 연속이면 발화 끝 |
-| `min_utterance_seconds` | 0.5 | 이보다 짧으면 잡음으로 버림 |
+## 주요 설정
 
----
+| 설정 | 기본값 | 의미 |
+|---|---:|---|
+| `model_size` | `medium` | 한국어 정확도 우선. CPU 지연이 크면 `small` |
+| `language` | `ko` | 한국어로 고정 |
+| `device` / `compute_type` | `auto` | CPU/int8 또는 CUDA/float16 |
+| `vad_backend` | `auto` | Silero → WebRTC → energy |
+| `silero_threshold` | `0.5` | 외부 Silero 말소리 확률 임계값 |
+| `silero_voiced_ratio` | `0.2` | 청크에서 요구하는 최소 말소리 비율 |
+| `max_utterance_seconds` | `8.0` | 발화를 강제로 끊는 최대 길이 |
+| `silence_release_chunks` | `1` | 음성 뒤 비음성 1청크에서 인식 시작 |
+| `min_utterance_seconds` | `0.5` | 너무 짧은 입력 제거 |
+| `whisper_vad_filter` | `True` | Whisper 내부 2차 Silero VAD |
+| `min_confidence` | `0.4` | 저신뢰 자막 표시 억제 |
+| `normalize_audio` | `False` | 잡음 증폭 위험 때문에 기본 OFF |
 
-## 실행 / 검증
-```bash
-pip install -r stt/requirements.txt
-python -m stt.run --wav some_speech.wav      # 파일 한 방 인식
-python -m stt.run --mic                       # 노트북 마이크 실시간
-pytest tests/test_stt.py                       # 엔진 없이 로직 검증(가짜 엔진)
-```
+신뢰도는 `exp(avg_logprob)` 기반 휴리스틱이며 보정된 확률이 아니다. 임계값 0.4는 공개
+도로소음 표본에서 환각을 제거하면서 평가 음성을 유지한 값으로, 실차 데이터가 생기면
+반드시 다시 조정한다.
 
-## 참고
-- 출력 형식: [../interfaces.md](../interfaces.md) (`SpeechResult`)
-- **Jetson 배포 + 의존성 충돌 정리**: [jetson.md](jetson.md)
-- 입력/오디오 공통: [../architecture.md](../architecture.md)
-- 평가: 알려진 문장을 도로 소음과 섞어 재생 → 인식 정확도(WER) 표.
+## 엔진 교체점
 
-## TODO
-- [x] 인터페이스(`SpeechResult`) + 모듈 스켈레톤 + 단위 테스트
-- [x] faster-whisper 엔진 래퍼(지연 import) + 에너지 VAD + 발화 버퍼링
-- [x] 인식 품질: RMS 정규화 + 환각 가드 + 라이브 상태 표시(미터/변환중)
-- [ ] 실제 faster-whisper 로 WAV 인식 품질 측정(노트북)
-- [ ] 도로 소음 환경에서 VAD 임계값 튜닝
-- [ ] (필요시) Silero VAD / 스트리밍 / Jetson 가속
-- [ ] (선택) DoA 와 연계해 말의 방향까지 표시
+`Transcriber(engine=...)`가 받는 엔진은
+`transcribe(samples, sample_rate) -> (text, confidence, language)`만 구현하면 된다.
+테스트는 이 인터페이스의 가짜 엔진을 사용하므로 모델 설치 없이 상태·오류·reset 동작을
+검증한다.
+
+## 검증과 남은 한계
+
+공개 FLEURS 한국어 사람 음성과 Figshare 도로소음을 섞은 실제 엔진 평가를 수행했다.
+수치와 재현 명령은 [validation.md](validation.md)에 있다. 아직 검증되지 않은 부분은
+실차 ReSpeaker 입력, 차량 스피커/확성기 음성, Jetson GPU 지연, 여러 사람이 겹쳐 말하는
+환경이다.

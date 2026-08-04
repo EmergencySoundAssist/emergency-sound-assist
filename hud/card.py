@@ -181,6 +181,26 @@ def spread_for_gauge(gauge: Optional[float]) -> int:
     return int(round(2 + max(0.0, min(1.0, gauge)) * 4))    # 0→2(멀리) … 1→6(최근접)
 
 
+RIPPLE_PERIOD_FAR = 28      # 멀 때 한 주기 프레임(@30fps) ≈ 0.93초 → 0.9 Hz
+RIPPLE_PERIOD_NEAR = 11     # 최근접 ≈ 0.37초 → 2.7 Hz
+
+
+def ripple_period_for_gauge(gauge: Optional[float]) -> int:
+    """근접 게이지(0.0~1.0) → 퍼짐 한 주기 프레임 수. 가까울수록 짧다(=빨리 퍼진다).
+
+    폭(spread_for_gauge)과 속도를 같은 게이지에 묶어, 가까워질수록 넓고 빠르게
+    퍼지게 한다. 운전자는 숫자를 읽지 않고 '리듬'으로 거리를 느낀다.
+
+    하한 11프레임(≈2.7 Hz)은 광과민성 안전선이다. 초당 3회를 넘는 점멸은 발작을
+    유발할 수 있어(WCAG 2.3.1 기준) 아무리 가까워도 그 아래로 내려가지 않는다.
+    게이지가 없으면(접근 아님·미상·경적) 중간값을 쓴다.
+    """
+    if gauge is None:
+        return (RIPPLE_PERIOD_FAR + RIPPLE_PERIOD_NEAR) // 2
+    g = max(0.0, min(1.0, gauge))
+    return int(round(RIPPLE_PERIOD_FAR - g * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))
+
+
 def should_ripple(is_horn: bool, motion: Motion) -> bool:
     """이 상태에서 '퍼지는 깜빡임'을 줄지. 경적은 상시(퍼짐 X), 접근 중일 때만 퍼진다."""
     return (not is_horn) and (motion is Motion.APPROACHING)

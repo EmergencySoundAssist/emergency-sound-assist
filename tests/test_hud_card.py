@@ -3,6 +3,7 @@
 from core.types import Direction, Motion
 from hud.card import (
     direction_to_index, blink_spec, is_lit_now, segment_brightness,
+    spread_for_gauge, ripple_period_for_gauge, ripple_brightness,
 )
 
 
@@ -416,3 +417,43 @@ def test_emergency_angle_positions_bar_left_vs_right():
     right_cx = cluster_cx(0)      # raw0   → 차량 우 → 오른쪽
     assert left_cx is not None and right_cx is not None
     assert left_cx < right_cx
+
+
+# ---------------------------------------------------------------------------
+# 근접도 → 퍼짐 폭 + 퍼짐 속도 (거리감을 리듬으로 전달)
+# ---------------------------------------------------------------------------
+def test_ripple_period_shortens_as_it_gets_closer():
+    """가까울수록 한 주기가 짧아진다 = 빠르게 퍼진다."""
+    far = ripple_period_for_gauge(0.0)
+    mid = ripple_period_for_gauge(0.5)
+    near = ripple_period_for_gauge(1.0)
+    assert far > mid > near
+
+
+def test_ripple_period_never_exceeds_photosensitivity_limit():
+    """어떤 게이지에서도 초당 3회를 넘지 않는다 (WCAG 2.3.1 발작 유발 한계)."""
+    fps = 30.0
+    for i in range(0, 101):
+        period = ripple_period_for_gauge(i / 100.0)
+        assert fps / period <= 3.0, f"gauge={i/100.0} 에서 {fps/period:.2f}Hz"
+
+
+def test_ripple_period_clamps_out_of_range_gauge():
+    assert ripple_period_for_gauge(-5.0) == ripple_period_for_gauge(0.0)
+    assert ripple_period_for_gauge(9.0) == ripple_period_for_gauge(1.0)
+
+
+def test_ripple_period_without_gauge_is_between_the_extremes():
+    """접근 아님·미상·경적이면 중간 속도 — 튀지도 멈추지도 않는다."""
+    none = ripple_period_for_gauge(None)
+    assert ripple_period_for_gauge(1.0) < none < ripple_period_for_gauge(0.0)
+
+
+def test_closer_source_spreads_wider_at_the_same_phase():
+    """폭과 속도가 같은 게이지에 묶여, 가까울수록 같은 시점에 더 멀리 퍼져 있다."""
+    seg, center, frame = 10, 7, 5           # 중심에서 3칸 떨어진 세그먼트
+    dim = ripple_brightness(seg, center, spread_for_gauge(0.0),
+                                     frame, ripple_period_for_gauge(0.0))
+    bright = ripple_brightness(seg, center, spread_for_gauge(1.0),
+                                        frame, ripple_period_for_gauge(1.0))
+    assert bright > dim

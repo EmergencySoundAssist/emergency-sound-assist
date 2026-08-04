@@ -5,8 +5,8 @@
 여기 정의된 형식만 지키면 pipeline 단계에서 문제없이 합쳐진다.
 
 - 오디오 입력 형식: AudioChunk
-- 각 모듈의 출력 형식: ClassResult / DirectionResult / ApproachResult
-- 최종 통합 결과: FusedResult  (예: "사이렌, 후방, 접근 중")
+- 각 독립 모듈의 출력 형식: ClassResult / DirectionResult / ApproachResult / SpeechResult
+- 실시간 통합 출력은 pipeline.alert.AlertEvent와 진단 info dict를 사용한다.
 """
 
 from __future__ import annotations
@@ -114,11 +114,20 @@ class Motion(str, Enum):
 @dataclass
 class ApproachResult:
     motion: Motion
-    speed_level: Optional[int] = None    # 접근 빠르기 1~5 — 음량 기울기 크기 (접근 중일 때만)
-    # 상대 근접도(거리) — 이벤트 내 '가장 컸던 순간(=최근접)' 대비 지금 위치. 절대 거리(m)가 아님.
+    # 아래 speed_level은 과거 호환용 '음량 변화 강도'다. 공개 데이터 검증에서 실제 차량
+    # 속도와의 대응이 확인되지 않아 최종 UI에서는 속도로 표시하지 않는다.
+    speed_level: Optional[int] = None
+    # 상대 근접도 — 이벤트 내 '가장 컸던 순간(=최근접)' 대비 지금 위치. 절대 거리(m)가 아님.
     proximity: Optional[str] = None      # "최근접" / "근거리" / "원거리" (접근 중·미상이면 None)
     rel_distance: Optional[float] = None # 최근접 대비 거리비 (≥1.0, 1.0=가장 가까웠던 지점)
     gauge: Optional[float] = None        # 연속 근접 게이지 0.0~1.0 — 다가오면 차오르고 멀어지면 빠짐
+    # 조건부 융합용 원시 진단값. None은 관측 창/톤이 아직 부족하다는 뜻이다.
+    energy_slope: Optional[float] = None       # log-대역파워/초: +커짐, -작아짐
+    frequency_slope: Optional[float] = None    # 대표 주파수 Hz/초
+    doppler_confidence: Optional[float] = None # 단일 피크 추세의 유효도(0~1)
+    doppler_motion: Motion = Motion.UNKNOWN    # 직접 도플러 가설(단독 최종판정 금지)
+    tone_ratio: Optional[float] = None          # 분석 프레임 중 톤 검출 비율
+    frequency_r2: Optional[float] = None        # 주파수 선형 추세 설명력
 
 
 # ---------------------------------------------------------------------------

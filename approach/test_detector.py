@@ -67,15 +67,15 @@ def run(label, **kw):
     return ok
 
 
-def test_speed_level_edges():
+def test_movement_level_edges():
     """음량 기울기 크기 → 접근 빠르기 1~5 (경계 포함)."""
-    from approach.detector import _speed_level
-    assert _speed_level(0.0) == 1
-    assert _speed_level(0.30) == 2
-    assert _speed_level(0.60) == 3
-    assert _speed_level(0.90) == 4
-    assert _speed_level(1.30) == 5
-    assert _speed_level(9.9) == 5           # 클램프
+    from approach.detector import _movement_level
+    assert _movement_level(0.0) == 1
+    assert _movement_level(0.30) == 2
+    assert _movement_level(0.60) == 3
+    assert _movement_level(0.90) == 4
+    assert _movement_level(1.30) == 5
+    assert _movement_level(9.9) == 5           # 클램프
 
 
 def test_update_carries_speed_and_proximity_fields():

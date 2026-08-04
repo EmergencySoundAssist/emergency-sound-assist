@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import Optional
 
 import numpy as np
@@ -39,9 +40,11 @@ from core.types import (
     Motion,
 )
 from classifier import infer as classify
+from classifier.inference import speed_evidence   # 패키지는 infer 만 재노출한다
 from doa.estimator import estimate_direction
 from approach.detector import ApproachDetector
 from pipeline.caption_gate import CaptionGate
+from pipeline.motion_fusion import ConditionalMotionFusion
 
 
 class Pipeline:
@@ -58,6 +61,9 @@ class Pipeline:
         clock=None,
     ) -> None:
         self._approach = ApproachDetector()
+        # 조건부 C 융합: 음량 추세 · 속도방향 모델 · 직접 도플러를 상황별로 골라 쓴다.
+        # 창은 약 1.5초 — 청크가 1초이므로 3틱. HUD 가 보는 motion 이 이 결과다.
+        self._fusion = ConditionalMotionFusion(smooth_size=3)
         self._active = False
         self._stt = stt_worker           # 평상시 음성→자막 (백그라운드, 없으면 STT 생략)
         self._caption = CaptionGate(hold_seconds)   # 자막 3초 유지 + 표시 중 입력 차단
@@ -69,15 +75,19 @@ class Pipeline:
         speech: Optional[SpeechResult] = None
 
         if cls.is_emergency:                     # ── 긴급: 경고 집중, STT 멈춤 ──
+            entering = not self._active          # 긴급 진입 edge 인지
             self._active = True
             direction = self._direction(chunk)
-            approach = self._approach.update(mono_chunk)
-            if self._stt is not None:
-                self._stt.reset()                # 긴급 진입 → 발화 버퍼 비움(즉시 반환)
+            approach = self._fuse(self._approach.update(mono_chunk))
+            # 긴급이 지속되는 동안 매 틱 reset 하면 이미 빈 버퍼를 계속 비우고,
+            # 띄워 둔 자막도 반복해서 지운다. 진입하는 순간에만 한 번 비운다.
+            if entering and self._stt is not None:
+                self._stt.reset()                # 발화 버퍼 비움(즉시 반환)
                 self._caption.reset()            # 유지 중이던 자막도 즉시 제거
         else:                                    # ── 평상시: STT 워커로 자막 ──
             if self._active:                     # 긴급음 종료 → 접근 추세 상태 초기화
                 self._approach.reset()
+                self._fusion.reset()             # 다음 이벤트가 이전 판정을 물려받지 않게
                 self._active = False
             direction = DirectionResult(direction=Direction.UNKNOWN)
             approach = ApproachResult(motion=Motion.UNKNOWN)
@@ -86,6 +96,22 @@ class Pipeline:
                 speech = self._caption.update(self._stt, mono_chunk, self._now())
 
         return FusedResult(sound=cls, direction=direction, approach=approach, speech=speech)
+
+    def _fuse(self, acoustic: ApproachResult) -> ApproachResult:
+        """음량 판단에 속도방향 모델과 직접 도플러를 조건부로 얹어 motion 을 확정한다.
+
+        HUD 는 FusedResult.approach.motion 하나만 읽으므로, 융합 결과를 그 자리에
+        돌려놓아야 화면이 실제 판정과 같아진다. proximity·gauge 등 나머지 필드는
+        음량 추세에서 그대로 나오므로 건드리지 않는다.
+
+        모델 창(5초)이 덜 찼거나 모델 파일이 없으면 speed_evidence() 가 None 을
+        돌려주고, 융합은 음량 판단으로 안전하게 폴백한다.
+        """
+        decision = self._fusion.update(speed_evidence(), acoustic)
+        self._fusion_source = decision.source          # 진단용 — 화면에는 쓰지 않는다
+        if decision.motion is acoustic.motion:
+            return acoustic
+        return replace(acoustic, motion=decision.motion)
 
     def _direction(self, chunk: AudioChunk) -> DirectionResult:
         """다채널이면 ch1~4 SRP-PHAT, 1채널이면 ReSpeaker 자체 DoA 폴백."""

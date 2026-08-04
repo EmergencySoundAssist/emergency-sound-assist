@@ -140,11 +140,13 @@ class Renderer:
             show_dir = hud_card.direction_visible(view.direction)
             center = hud_card.direction_to_index(None, view.direction, n=15)
         if show_dir:
-            radius = hud_card.spread_for_gauge(getattr(view, "gauge", None))  # 가까울수록 넓게
+            gauge = getattr(view, "gauge", None)
+            radius = hud_card.spread_for_gauge(gauge)              # 가까울수록 넓게
+            period = hud_card.ripple_period_for_gauge(gauge)       # 가까울수록 빠르게
             ripple = hud_card.should_ripple(getattr(view, "is_horn", False),
                                             view.approach_motion())
             self._draw_direction_strip(surface, w, h, h // 2, color, center,
-                                       radius, ripple, self._frame, GLOW)
+                                       radius, ripple, self._frame, GLOW, period)
 
         # 하단: 구분선 + 자막(있을 때만, 자동 줄바꿈)
         if view.subtitle:
@@ -156,10 +158,13 @@ class Renderer:
             self._center_multiline(surface, lines, self._f_cap, FG, w // 2, h - int(h * 0.1))
 
     def _draw_direction_strip(self, surface, w, h, y, color, center,
-                              radius, ripple, frame, glow):
+                              radius, ripple, frame, glow,
+                              period: int = hud_card.RIPPLE_PERIOD):
         """15-세그먼트 방향 LED 스트립 + L/R 라벨을 행 y 에 그린다.
 
-        center: 점등 중심 세그먼트 인덱스. radius: 퍼짐 반경(접근 빠르기가 결정).
+        center: 점등 중심 세그먼트 인덱스.
+        radius: 퍼짐 반경 — 가까울수록 넓다(근접 게이지가 결정).
+        period: 퍼짐 한 주기 프레임 — 가까울수록 짧다(=빠르게 퍼진다).
         ripple=True 면 중앙→바깥으로 퍼지는 깜빡임, False 면 정적 클러스터.
         긴급/평상시(idle) 화면이 공유한다.
         """
@@ -171,7 +176,7 @@ class Renderer:
         seg_h = int(h * SEG_H_RATIO)
         for i in range(n):
             if ripple:
-                b = hud_card.ripple_brightness(i, center, radius, frame)
+                b = hud_card.ripple_brightness(i, center, radius, frame, period)
             else:
                 b = hud_card.segment_brightness(i, center, radius)
             _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, seg_h, color, b, glow)
@@ -182,13 +187,21 @@ class Renderer:
 
     @staticmethod
     def _subline(view) -> str:
-        """헤더 서브라인. 경적은 접근/이동을 출력하지 않고 방향만 보여준다."""
+        """헤더 서브라인. 경적은 접근/이동을 출력하지 않고 방향만 보여준다.
+
+        근접도(최근접/근거리/원거리)는 값이 확정된 뒤에만 덧붙인다. 상대 거리이지
+        미터가 아니므로 숫자로 쓰지 않는다 — 스트립의 퍼짐 폭·속도가 같은 값을
+        연속적으로 보여주고, 이 문구는 그것을 말로 확인해 주는 역할만 한다.
+        """
         known = (Direction.LEFT, Direction.RIGHT, Direction.FRONT, Direction.REAR)
         if getattr(view, "is_horn", False):
             return view.direction_text if view.direction in known else ""
         if view.direction in known:
-            return f"{view.direction_text}에서 {view.motion_text}"
-        return view.motion_text
+            line = f"{view.direction_text}에서 {view.motion_text}"
+        else:
+            line = view.motion_text
+        prox = getattr(view, "proximity", None)
+        return f"{line} · {prox}" if prox else line
 
     def _draw_normal(self, surface, view, w, h):
         self._frame = (self._frame + 1) % 100000

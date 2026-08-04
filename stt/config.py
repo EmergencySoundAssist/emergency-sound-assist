@@ -36,12 +36,14 @@ class STTConfig:
     num_workers: int = 1           # 단일 실시간 스트림은 1
 
     # ----- VAD(음성 활동 감지): 노이즈를 거르고 음성일 때만 인식 -----
-    # webrtcvad(말소리/비음성 구분, torch 0)가 있으면 자동 사용 → 노이즈 환각 억제.
-    # 없으면 energy(RMS) 폴백. 강제: vad_backend="webrtc"|"energy".
+    # auto는 faster-whisper 내장 Silero ONNX → WebRTC → energy 순으로 선택한다.
+    # 강제: vad_backend="silero"|"webrtc"|"energy".
     vad_backend: str = "auto"
+    silero_threshold: float = 0.5          # 말소리 확률 임계값
+    silero_voiced_ratio: float = 0.2       # 1초 청크에서 말소리 구간이 차지할 최소 비율
     webrtc_aggressiveness: int = 2       # 0~3 (높을수록 비음성 강하게 걸러냄)
     webrtc_voiced_ratio: float = 0.2     # 1초 청크 중 음성 프레임 비율 ≥ 이면 음성
-    # energy 폴백용 임계값(webrtcvad 없을 때만). 너무 낮추면(0.005) 노이즈→환각.
+    # energy 폴백/강제 선택용 임계값. 너무 낮추면(0.005) 노이즈→환각.
     vad_rms_threshold: float = 0.02
 
     # ----- 발화 단위 버퍼링 -----
@@ -59,6 +61,12 @@ class STTConfig:
     no_speech_threshold: float = 0.6
     log_prob_threshold: float = -1.0
     compression_ratio_threshold: float = 2.4
+    # 외부 VAD가 도로소음을 말소리로 오인해도 Whisper 앞에서 한 번 더 거른다.
+    # faster-whisper 내장 Silero VAD이므로 별도 torch 의존성은 없다.
+    whisper_vad_filter: bool = True
+    # avg_logprob 기반 휴리스틱 신뢰도. 공개 도로소음 벤치마크의 저신뢰 환각을 차단한다.
+    # 확률 보정값은 아니므로 실제 마이크 데이터 확보 후 다시 튜닝해야 한다.
+    min_confidence: float = 0.4
 
     @property
     def sample_rate(self) -> int:

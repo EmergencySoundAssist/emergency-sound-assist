@@ -7,6 +7,9 @@ faster-whisper 없이도(오프라인·CPU) 돌아가게, 엔진은 '가짜 엔�
 
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -17,8 +20,11 @@ from stt.transcriber import (
     Transcriber, transcribe_array, FasterWhisperEngine,
     _normalize_rms, _rms, _fallback_chain, _looks_like_oom,
 )
-from stt.vad import EnergyVad, WebRtcVad, make_vad
+from stt.vad import EnergyVad, SileroVad, WebRtcVad, make_vad
+from stt.worker import STTWorker
 from audio.capture import iter_chunks_threaded
+from pipeline import alert as alert_module
+from pipeline.runner import Pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +57,24 @@ def _silent_chunk(seconds=1.0, sr=SAMPLE_RATE):
     return AudioChunk(samples=np.zeros(n, dtype=np.float32), sample_rate=sr)
 
 
+def _energy_config(**changes):
+    """버퍼 로직 테스트가 로컬 webrtcvad 설치 여부에 흔들리지 않게 한다."""
+    cfg = STTConfig(vad_backend="energy")
+    for key, value in changes.items():
+        setattr(cfg, key, value)
+    return cfg
+
+
+def _wait_until(predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.01)
+    return predicate()
+
+
 # ---------------------------------------------------------------------------
 # SpeechResult (순수 텍스트)
 # ---------------------------------------------------------------------------
@@ -75,7 +99,7 @@ def test_speechresult_empty_text_is_no_voice():
 # ---------------------------------------------------------------------------
 def test_silence_does_not_call_engine():
     eng = FakeEngine()
-    t = Transcriber(engine=eng)
+    t = Transcriber(config=_energy_config(), engine=eng)
     r = t.transcribe(_silent_chunk())
     assert r.is_speech is False
     assert eng.calls == 0
@@ -86,7 +110,7 @@ def test_silence_does_not_call_engine():
 # ---------------------------------------------------------------------------
 def test_speech_then_silence_flushes_once():
     eng = FakeEngine(text="앞에 차가 지나갑니다")
-    t = Transcriber(engine=eng)
+    t = Transcriber(config=_energy_config(), engine=eng)
 
     # 음성 2초 누적 → 아직 인식 전(엔진 호출 0)
     r1 = t.transcribe(_voice_chunk())
@@ -103,8 +127,7 @@ def test_speech_then_silence_flushes_once():
 
 
 def test_short_utterance_is_dropped():
-    cfg = STTConfig()
-    cfg.min_utterance_seconds = 0.5
+    cfg = _energy_config(min_utterance_seconds=0.5)
     eng = FakeEngine()
     t = Transcriber(config=cfg, engine=eng)
 
@@ -116,8 +139,7 @@ def test_short_utterance_is_dropped():
 
 
 def test_max_utterance_forces_flush():
-    cfg = STTConfig()
-    cfg.max_utterance_seconds = 2.0
+    cfg = _energy_config(max_utterance_seconds=2.0)
     eng = FakeEngine()
     t = Transcriber(config=cfg, engine=eng)
 
@@ -129,17 +151,31 @@ def test_max_utterance_forces_flush():
 
 def test_flush_on_stream_end():
     eng = FakeEngine()
-    t = Transcriber(engine=eng)
+    t = Transcriber(config=_energy_config(), engine=eng)
     t.transcribe(_voice_chunk())          # 누적만 (무음이 안 와서 flush 안 됨)
     assert eng.calls == 0
     tail = t.flush()                      # 스트림 종료 → 남은 발화 인식
     assert eng.calls == 1 and tail.is_speech is True
 
 
+def test_low_confidence_caption_is_suppressed():
+    class LowConfidenceEngine(FakeEngine):
+        def transcribe(self, samples, sample_rate):
+            self.calls += 1
+            return "시청해주셔서 감사합니다", 0.2, "ko"
+
+    t = Transcriber(config=_energy_config(min_confidence=0.4), engine=LowConfidenceEngine())
+    t.transcribe(_voice_chunk())
+    result = t.transcribe(_silent_chunk())
+    assert result.is_speech is True
+    assert result.text == ""
+    assert result.confidence == 0.2
+
+
 def test_on_status_fires_transcribing_only_when_engine_runs():
     events = []
     eng = FakeEngine()
-    t = Transcriber(engine=eng, on_status=events.append)
+    t = Transcriber(config=_energy_config(), engine=eng, on_status=events.append)
     t.transcribe(_voice_chunk())          # 버퍼링 중 — 아직 변환 전
     assert events == []
     t.transcribe(_silent_chunk())         # 발화 끝 → flush → 엔진 실행
@@ -256,15 +292,35 @@ def test_webrtcvad_none_voiced_not_speech():
     assert v.is_speech(np.ones(SAMPLE_RATE, dtype=np.float32) * 0.2, SAMPLE_RATE) is False
 
 
+def test_silero_vad_uses_voiced_duration_ratio():
+    def timestamps(audio, options, sampling_rate):
+        return [{"start": 1000, "end": 5000}]
+
+    samples = np.zeros(SAMPLE_RATE, dtype=np.float32)
+    assert SileroVad(voiced_ratio=0.2, _timestamps=timestamps).is_speech(samples, SAMPLE_RATE)
+    assert not SileroVad(voiced_ratio=0.3, _timestamps=timestamps).is_speech(samples, SAMPLE_RATE)
+
+
 def test_make_vad_energy_backend():
     cfg = STTConfig(vad_backend="energy")
     assert isinstance(make_vad(cfg), EnergyVad)
 
 
+def test_make_vad_rejects_unknown_backend():
+    with pytest.raises(ValueError, match="VAD backend"):
+        make_vad(STTConfig(vad_backend="unknown"))
+
+
 def test_make_vad_auto_falls_back_when_no_webrtc(monkeypatch):
-    # webrtcvad import 를 실패시켜 auto → energy 폴백 확인
+    # Silero와 WebRTC import를 모두 실패시켜 auto → energy 폴백 확인
     import builtins
+    import stt.vad as vad_module
     real_import = builtins.__import__
+
+    def no_silero(*args, **kwargs):
+        raise ImportError("no silero")
+
+    monkeypatch.setattr(vad_module, "SileroVad", no_silero)
 
     def fake_import(name, *a, **k):
         if name == "webrtcvad":
@@ -293,6 +349,136 @@ def test_iter_chunks_threaded_propagates_error():
 
 
 # ---------------------------------------------------------------------------
+# 통합 STTWorker: 긴급 reset·예외·큐 밀림
+# ---------------------------------------------------------------------------
+class _BlockingTranscriber:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.reset_applied = threading.Event()
+
+    def transcribe(self, chunk):
+        self.started.set()
+        self.release.wait(timeout=2.0)
+        return SpeechResult(text="긴급 전 오래된 자막", is_speech=True)
+
+    def reset(self):
+        self.reset_applied.set()
+
+
+def test_worker_reset_discards_inflight_caption():
+    transcriber = _BlockingTranscriber()
+    worker = STTWorker(transcriber, max_queue=2)
+    worker.start()
+    try:
+        worker.feed(_voice_chunk())
+        assert transcriber.started.wait(timeout=1.0)
+        worker.reset()                         # 변환 도중 긴급 진입
+        transcriber.release.set()
+        assert transcriber.reset_applied.wait(timeout=1.0)
+        assert worker.latest() is None         # 이전 세대 결과는 게시되지 않음
+        assert worker.status()["reset_count"] == 1
+    finally:
+        transcriber.release.set()
+        worker.stop()
+
+
+class _RecoveringTranscriber:
+    def __init__(self):
+        self.calls = 0
+
+    def transcribe(self, chunk):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("decoder failed")
+        return SpeechResult(text="복구된 자막", is_speech=True)
+
+    def reset(self):
+        pass
+
+
+def test_worker_reports_error_and_recovers_on_next_chunk():
+    worker = STTWorker(_RecoveringTranscriber())
+    worker.start()
+    try:
+        worker.feed(_voice_chunk())
+        assert _wait_until(lambda: worker.status()["last_error"])
+        assert worker.status()["alive"]
+
+        worker.feed(_voice_chunk())
+        result = _wait_until(worker.latest)
+        assert result is not None and result.text == "복구된 자막"
+        assert worker.status()["last_error"] is None
+    finally:
+        worker.stop()
+
+
+def test_worker_counts_dropped_chunks_when_queue_is_full():
+    transcriber = _BlockingTranscriber()
+    worker = STTWorker(transcriber, max_queue=1)
+    worker.start()
+    try:
+        worker.feed(_voice_chunk())
+        assert transcriber.started.wait(timeout=1.0)
+        worker.feed(_voice_chunk())              # 대기열 1칸 사용
+        worker.feed(_voice_chunk())              # 초과 → 드롭 카운트
+        assert worker.status()["dropped_chunks"] == 1
+    finally:
+        transcriber.release.set()
+        worker.stop()
+
+
+class _ResetCountingWorker:
+    def __init__(self):
+        self.resets = 0
+
+    def reset(self):
+        self.resets += 1
+
+    def feed(self, chunk):
+        pass
+
+    def latest(self):
+        return None
+
+
+def test_pipeline_resets_stt_only_on_emergency_transition(monkeypatch):
+    """긴급 '진입' 에서만 STT 버퍼를 비운다 — 긴급이 지속되는 매 틱마다가 아니라.
+
+    codex 런너의 private `_stt_step` 대신, 이 브랜치에 실제로 존재하는 공개
+    경로 Pipeline.process 로 같은 행동을 검증한다. 분류기는 ONNX 를 태우지 않고
+    monkeypatch 로 긴급/평상을 직접 지시한다.
+    """
+    import pipeline.runner as runner_mod
+    from core.types import ClassResult, SoundClass, DirectionResult, Direction
+
+    emergency = {"on": True}
+    monkeypatch.setattr(
+        runner_mod, "classify",
+        lambda chunk: ClassResult.from_label(
+            SoundClass.SIREN if emergency["on"] else SoundClass.NORMAL_TRAFFIC, 0.9),
+    )
+    # 방향·접근은 이 테스트의 관심사가 아니다(ONNX·pyroomacoustics 회피).
+    monkeypatch.setattr(runner_mod.Pipeline, "_direction",
+                        lambda self, chunk: DirectionResult(direction=Direction.UNKNOWN))
+    monkeypatch.setattr(runner_mod.Pipeline, "_fuse", lambda self, acoustic: acoustic)
+
+    worker = _ResetCountingWorker()
+    pipe = Pipeline(stt_worker=worker)
+    chunk = AudioChunk(samples=np.zeros(SAMPLE_RATE, dtype=np.float32),
+                       sample_rate=SAMPLE_RATE)
+
+    pipe.process(chunk)
+    pipe.process(chunk)                      # 긴급 지속 — 추가 reset 없어야 한다
+    assert worker.resets == 1
+    emergency["on"] = False
+    pipe.process(chunk)                      # 평상 복귀
+    emergency["on"] = True
+    pipe.process(chunk)                      # 다시 긴급 진입 edge
+    assert worker.resets == 2
+
+
+# ---------------------------------------------------------------------------
 # OOM 자동 폴백 (float16 → int8_float16 → int8 → cpu/int8)
 # ---------------------------------------------------------------------------
 class _FakeModel:
@@ -301,6 +487,7 @@ class _FakeModel:
         self._text = text
 
     def transcribe(self, samples, **kwargs):
+        self.kwargs = kwargs
         seg = type("S", (), {"text": self._text, "avg_logprob": -0.2})()
         info = type("I", (), {"language": "ko"})()
         return [seg], info
@@ -338,6 +525,7 @@ def test_engine_load_oom_falls_back_one_step():
     assert (eng._device, eng._compute_type) == ("cuda", "int8_float16")
     text, _, lang = eng.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
     assert text == "테스트" and lang == "ko"
+    assert eng._model.kwargs["vad_filter"] is True
 
 
 def test_engine_load_oom_falls_back_to_cpu_when_all_cuda_fail():
@@ -377,3 +565,76 @@ def test_engine_transcribe_oom_rebuilds_and_retries():
     text, _, _ = eng.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
     assert text == "복구됨"
     assert eng._compute_type == "int8_float16"  # 변환 OOM 후 폴백됨
+
+
+# ---------------------------------------------------------------------------
+# 대시보드 자막 유지
+# ---------------------------------------------------------------------------
+def _dashboard_event(kind="none"):
+    return alert_module.AlertEvent(
+        level="NONE" if kind == "none" else "WARN",
+        kind=kind,
+        label="" if kind == "none" else "경적",
+        margin=0.0,
+        onset=False,
+        remind=False,
+        clear=False,
+    )
+
+
+def test_dashboard_holds_caption_for_reading(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(alert_module.time, "monotonic", lambda: clock[0])
+    dashboard = alert_module.DashboardSink(caption_hold_seconds=5.0)
+
+    lines = dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="앞에 사고가 발생했습니다", is_speech=True)},
+    )
+    assert any("앞에 사고가 발생했습니다" in line for line in lines)
+
+    clock[0] = 104.9
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+    assert any("앞에 사고가 발생했습니다" in line for line in lines)
+
+    clock[0] = 105.0
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+    assert any("(음성 없음)" in line for line in lines)
+
+
+def test_dashboard_new_caption_replaces_and_extends_hold(monkeypatch):
+    clock = [10.0]
+    monkeypatch.setattr(alert_module.time, "monotonic", lambda: clock[0])
+    dashboard = alert_module.DashboardSink(caption_hold_seconds=5.0)
+
+    dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="첫 문장", is_speech=True)},
+    )
+    clock[0] = 13.0
+    dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="두 번째 문장", is_speech=True)},
+    )
+    clock[0] = 17.9
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+
+    assert any("두 번째 문장" in line for line in lines)
+    assert all("첫 문장" not in line for line in lines)
+
+
+def test_dashboard_emergency_clears_held_caption(monkeypatch):
+    clock = [20.0]
+    monkeypatch.setattr(alert_module.time, "monotonic", lambda: clock[0])
+    dashboard = alert_module.DashboardSink(caption_hold_seconds=5.0)
+
+    dashboard._render(
+        _dashboard_event(),
+        {"speech": SpeechResult(text="긴급 전 자막", is_speech=True)},
+    )
+    dashboard._render(_dashboard_event("horn"), {"speech": None})
+    clock[0] = 21.0
+    lines = dashboard._render(_dashboard_event(), {"speech": None})
+
+    assert any("(음성 없음)" in line for line in lines)
+    assert all("긴급 전 자막" not in line for line in lines)

@@ -53,7 +53,10 @@ class HudView:
     speed_level: Optional[int] = None       # 접근 빠르기 1~5. 없으면 None
     motion: Motion = Motion.UNKNOWN         # 원본 Motion(렌더러 blink 판단용)
     is_horn: bool = False                   # 경적이면 True → 접근/이동 출력 안 함
-    gauge: Optional[float] = None           # 근접 게이지 0~1 (거리감) → 바 퍼짐 폭
+    gauge: Optional[float] = None           # 근접 게이지 0~1 (거리감) → 바 퍼짐 폭·속도
+    # 상대 근접도 라벨. '최근접/근거리/원거리' — 절대 거리(m)가 아니라 이벤트 내
+    # 가장 컸던 순간 대비 위치다. 미터로 읽히지 않게 화면에서도 그대로 쓴다.
+    proximity: Optional[str] = None
 
     def approach_motion(self) -> Motion:
         """렌더러가 blink 판단에 쓰는 원본 Motion 접근자."""
@@ -72,6 +75,7 @@ class HudView:
         angle_deg = fused.direction.angle_deg
         speed_level = getattr(fused.approach, "speed_level", None)
         gauge = getattr(fused.approach, "gauge", None)
+        proximity = getattr(fused.approach, "proximity", None)
         is_horn = s.label is SoundClass.HORN
         return cls(
             emergency=s.is_emergency,
@@ -86,4 +90,5 @@ class HudView:
             motion=fused.approach.motion,
             is_horn=is_horn,
             gauge=gauge,
+            proximity=proximity,
         )
