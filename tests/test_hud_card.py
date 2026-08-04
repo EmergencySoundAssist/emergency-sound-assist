@@ -97,13 +97,13 @@ def _renderer_and_surface():
     return r, pygame.Surface((1280, 720))
 
 
-def _view(direction, angle_deg=None, speed_level=None, subtitle="", sound="구급차"):
+def _view(direction, angle_deg=None, subtitle="", sound="구급차"):
     from hud.viewmodel import HudView
     from core.types import Motion
     return HudView(
         emergency=True, sound_text=sound, direction=direction,
         direction_text="좌측", motion_text="접근 중", subtitle=subtitle,
-        confidence=0.9, angle_deg=angle_deg, speed_level=speed_level,
+        confidence=0.9, angle_deg=angle_deg,
         motion=Motion.APPROACHING,
     )
 
@@ -123,7 +123,7 @@ def test_render_future_state_no_crash():
     import pygame
     from core.types import Direction
     r, surf = _renderer_and_surface()
-    r._draw_emergency(surf, _view(Direction.RIGHT, angle_deg=60.0, speed_level=5,
+    r._draw_emergency(surf, _view(Direction.RIGHT, angle_deg=60.0,
                                   sound="소방차"), 1280, 720)
     assert r._frame == 1
     assert pygame.surfarray.array3d(surf).sum() > 0
