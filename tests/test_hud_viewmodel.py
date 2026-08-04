@@ -128,3 +128,29 @@ def test_relative_distance_only_after_the_closest_point():
         speech=None,
     )
     assert HudView.from_fused(v).rel_distance == 3.32
+
+
+def test_level_text_declares_dbfs_when_uncalibrated():
+    """마이크 감도 보정 전에는 단위를 dBFS 로 밝힌다 — dB 로 적으면 물리 음압으로 읽힌다."""
+    from hud.viewmodel import _level_text
+    from approach.detector import SPL_CALIBRATED
+    txt = _level_text(-12.4)
+    assert txt is not None
+    assert ("dBFS" in txt) is (not SPL_CALIBRATED)
+
+
+def test_level_text_absent_without_a_reading():
+    from hud.viewmodel import _level_text
+    assert _level_text(None) is None
+
+
+def test_level_survives_into_the_view():
+    v = FusedResult(
+        sound=ClassResult.from_label(SoundClass.SIREN, 0.9),
+        direction=DirectionResult(direction=Direction.REAR),
+        approach=ApproachResult(motion=Motion.APPROACHING, gauge=0.5, level_db=-12.4),
+        speech=None,
+    )
+    view = HudView.from_fused(v)
+    assert view.level_db == -12.4
+    assert "12" in view.level_text

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from approach.detector import SPL_CALIBRATED
 from core.types import (
     FusedResult, SoundClass, SirenSubtype, Direction, Motion,
 )
@@ -66,6 +67,17 @@ def _proximity_text(label, gauge, motion) -> Optional[str]:
     return "근거리" if gauge >= _GAUGE_MID else "원거리"
 
 
+def _level_text(level_db) -> Optional[str]:
+    """레벨 문구. 미보정이면 dBFS 임을 그대로 밝힌다.
+
+    'dB' 로만 적으면 물리 음압(dB SPL)으로 읽힌다. 마이크 감도 보정 전에는
+    디지털 풀스케일 기준값이므로 단위를 속이지 않는다.
+    """
+    if level_db is None:
+        return None
+    return f"{level_db:.0f} dB" if SPL_CALIBRATED else f"{level_db:+.0f} dBFS"
+
+
 @dataclass
 class HudView:
     """렌더러가 소비하는 표시용 뷰모델."""
@@ -87,6 +99,10 @@ class HudView:
     # 최근접 대비 거리비(≥1.0). 최고점을 지난 뒤에만 값이 있다 — 기준점이 그때
     # 확정되기 때문. 접근 중에는 None 이고, 이것도 미터가 아니다.
     rel_distance: Optional[float] = None
+    # 사이렌 대역 레벨(dBFS 또는 보정 시 dB SPL). 이벤트 이력과 무관하게 지금
+    # 도달한 소리의 세기라, 접근 초반부터 끊김 없이 값이 있다.
+    level_db: Optional[float] = None
+    level_text: Optional[str] = None        # 화면 문구 — 단위까지 확정된 형태
 
     def approach_motion(self) -> Motion:
         """렌더러가 blink 판단에 쓰는 원본 Motion 접근자."""
@@ -105,6 +121,7 @@ class HudView:
         angle_deg = fused.direction.angle_deg
         speed_level = getattr(fused.approach, "speed_level", None)
         gauge = getattr(fused.approach, "gauge", None)
+        level_db = getattr(fused.approach, "level_db", None)
         proximity = _proximity_text(
             getattr(fused.approach, "proximity", None), gauge, fused.approach.motion)
         is_horn = s.label is SoundClass.HORN
@@ -123,4 +140,6 @@ class HudView:
             gauge=gauge,
             proximity=proximity,
             rel_distance=getattr(fused.approach, "rel_distance", None),
+            level_db=level_db,
+            level_text=_level_text(level_db),
         )

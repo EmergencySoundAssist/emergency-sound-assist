@@ -128,6 +128,10 @@ class ApproachResult:
     doppler_motion: Motion = Motion.UNKNOWN    # 직접 도플러 가설(단독 최종판정 금지)
     tone_ratio: Optional[float] = None          # 분석 프레임 중 톤 검출 비율
     frequency_r2: Optional[float] = None        # 주파수 선형 추세 설명력
+    # 사이렌 대역 레벨. 기본은 dBFS(디지털 풀스케일 기준)이고, 마이크 감도
+    # 보정 오프셋이 설정되면 dB SPL 이 된다. 상대 근접도와 달리 이벤트 이력에
+    # 의존하지 않아, 접근 중이든 통과 후든 같은 뜻을 갖는다.
+    level_db: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------

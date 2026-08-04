@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 import numpy as np
 
@@ -51,6 +52,21 @@ MIN_RISE = 1.5          # 이벤트 시작 대비 최고치가 이만큼(≈6.5d
 # 실행 중 튜닝: ESA_GAUGE_SPAN=1.0 python main.py ...  (환경변수로 기본값 덮어씀)
 # ⚠ 상대값 — 절대 거리(m) 아님, 실차 튜닝 대상.
 GAUGE_SPAN = float(os.environ.get("ESA_GAUGE_SPAN", "1.5"))   # 기본 1.5 (≈6.5dB)
+
+# 사이렌 대역 음압 레벨을 화면에 띄우기 위한 보정 오프셋(dB).
+#
+# 샘플에서 직접 나오는 값은 dBFS — 디지털 풀스케일 기준이라 물리 음압이 아니다.
+# 여기에 마이크 감도 상수를 더하면 dB SPL 이 된다:  SPL = dBFS + OFFSET.
+# 절대 거리와 달리 미지수가 '마이크 감도' 하나뿐이라 소음계 한 번으로 잡힌다
+# (거리는 음원의 절대 출력까지 알아야 해서 마이크 하나로는 못 푼다).
+#
+# 0 이면 미보정 — 화면에 dBFS 로 표기한다. 보정 후 실측값을 넣으면 dB 로 바뀐다.
+#   측정: 소음계로 기준음 X dB SPL 을 재면서 같은 순간 dBFS 를 읽고 X - dBFS.
+# ⚠ ReSpeaker AGC 가 켜져 있으면 어떤 값도 무의미하다. 게인이 실시간으로 바뀌어
+#   같은 소리가 거리에 따라 같은 레벨로 읽힌다. 보정 전에 반드시 끌 것:
+#   python -m doa.respeaker_tuning AGCONOFF 0
+SPL_OFFSET_DB = float(os.environ.get("ESA_SPL_OFFSET_DB", "0"))
+SPL_CALIBRATED = SPL_OFFSET_DB != 0.0
 
 
 def _movement_level(eslope: float) -> int:
@@ -181,6 +197,24 @@ class ApproachDetector:
         return self.current()
 
     # ------------------------------------------------------------------
+    def _band_level_db(self) -> Optional[float]:
+        """관측 창 마지막 1초의 사이렌 대역 레벨(dBFS, 보정되면 dB SPL).
+
+        상대 근접도와 달리 이 값은 이벤트 이력에 의존하지 않는다 — 지금 이 순간
+        마이크에 도달한 소리의 세기다. 그래서 접근 중에도 통과 후에도 같은 뜻이다.
+        """
+        if self._buf.size < self.frame:
+            return None
+        x = self._buf[-min(self._buf.size, self.sr):]     # 마지막 1초
+        spec = np.abs(np.fft.rfft(x * np.hanning(x.size)))
+        freqs = np.fft.rfftfreq(x.size, 1.0 / self.sr)
+        m = (freqs >= self.band[0]) & (freqs <= self.band[1])
+        if not m.any():
+            return None
+        # 창 보정(Hann 이득 0.5)을 되돌린 대역 RMS → dBFS
+        rms = float(np.sqrt(np.sum(spec[m] ** 2)) / (x.size * 0.5) * np.sqrt(2.0))
+        return 20.0 * np.log10(rms + 1e-12) + SPL_OFFSET_DB
+
     def _decide(self):
         """음량 판단과 조건부 융합에 쓸 도플러 진단값을 함께 반환."""
         if self._buf.size < self.frame:
@@ -200,9 +234,11 @@ class ApproachDetector:
         tone = ~np.isnan(fs)                      # 사이렌 톤이 잡힌 프레임
         tone_ratio = float(tone.mean()) if tone.size else 0.0
         if tone.sum() < self.min_valid_frames:
-            return ApproachResult(Motion.UNKNOWN, tone_ratio=tone_ratio)
+            return ApproachResult(Motion.UNKNOWN, tone_ratio=tone_ratio,
+                                  level_db=self._band_level_db())
         if np.ptp(ts[tone]) < self.min_span_seconds:
-            return ApproachResult(Motion.UNKNOWN, tone_ratio=tone_ratio)
+            return ApproachResult(Motion.UNKNOWN, tone_ratio=tone_ratio,
+                                  level_db=self._band_level_db())
 
         # 주 신호: log-에너지 추세(부호가 통과점에서 뒤집힘)
         e_ok = np.isfinite(es)
@@ -253,6 +289,7 @@ class ApproachDetector:
             doppler_motion=doppler_motion,
             tone_ratio=tone_ratio,
             frequency_r2=float(frequency_r2),
+            level_db=self._band_level_db(),
         )
 
     def _proximity(self, motion, cur_loge):

@@ -203,6 +203,11 @@ class Renderer:
         prox = getattr(view, "proximity", None)
         if prox:
             line = f"{line} · {prox}"
+        # 레벨은 접근 초반부터 끊김 없이 있으므로 거리비보다 앞에 둔다.
+        # 단위 판단(dBFS/dB SPL)은 뷰모델이 이미 문자열에 담아 준다.
+        lv = getattr(view, "level_text", None)
+        if lv:
+            line += f"  {lv}"
         # 거리비는 최근접을 지난 뒤에만 값이 있다. '최근접 대비'를 붙여 미터로
         # 읽히지 않게 하고, 10배를 넘으면 자릿수 대신 상한으로 잘라 말한다.
         rel = getattr(view, "rel_distance", None)
