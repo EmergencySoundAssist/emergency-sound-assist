@@ -1,5 +1,7 @@
 """HUD LED 카드 순수 로직 테스트 — 방향→위치, 빠르기→blink, 밝기 감쇠."""
 
+import pytest
+
 from core.types import Direction, Motion
 from hud.card import (
     direction_to_index, blink_spec, is_lit_now, segment_brightness,
@@ -502,3 +504,45 @@ def test_ripple_period_never_crosses_the_photosensitivity_limit():
     for i in range(0, 201):
         t = (i - 50) / 100.0                 # -0.5 ~ 1.5 (범위 밖 포함)
         assert ripple_period_for_spl(t) >= 11
+
+
+from hud.card import Layout
+
+
+def test_layout_matches_the_reference_resolution():
+    """1280×360 에서 스펙 §4 의 값이 나와야 한다."""
+    lo = Layout.for_size(1280, 360)
+    assert lo.margin == 72
+    assert lo.veh_xy == (72, 78)
+    assert lo.bar_cy == 150
+    assert lo.seg_h == 34
+    assert lo.seg_n == 15
+    assert lo.meter_y == 232
+    assert lo.cap_cy == 322
+    # 폰트도 같은 곳에서 나온다 — 현재 렌더러의 h//12 계열은 목업(104px)의 절반도 안 된다
+    assert lo.f_veh == 104
+    assert lo.f_state == 44
+    assert lo.f_db == 32
+    assert lo.f_cap == 38
+
+
+def test_layout_is_frozen_so_no_one_can_drift_a_coordinate():
+    lo = Layout.for_size(1280, 360)
+    with pytest.raises(Exception):
+        lo.bar_cy = 999
+
+
+def test_layout_scales_to_other_sizes():
+    small = Layout.for_size(640, 180)
+    assert small.margin == 36
+    assert small.bar_cy == 75
+    assert small.bar_w > 0 and small.seg_h > 0
+
+
+def test_layout_bar_stays_inside_the_screen():
+    for w, h in [(1280, 360), (640, 180), (1920, 540), (800, 480)]:
+        lo = Layout.for_size(w, h)
+        assert lo.bar_x >= 0
+        assert lo.bar_x + lo.bar_w <= w
+        assert lo.db_right <= w
+        assert lo.cap_cy < h

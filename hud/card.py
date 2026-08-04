@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
 from core.types import Direction, Motion
@@ -260,3 +261,56 @@ def ripple_period_for_spl(t: float) -> int:
     """
     t = max(0.0, min(1.0, t))
     return int(round(RIPPLE_PERIOD_FAR - t * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))
+
+
+# ── 고정 레이아웃 ────────────────────────────────────────────────────────
+# 좌표는 여기에서만 나온다. 상태가 바뀌어도 요소가 이동·신축하지 않아야 운전 중
+# 흘긋 볼 때 눈이 매번 같은 자리를 본다. 비율은 1280×360(윈드실드 띠)에서 뽑았다.
+@dataclass(frozen=True)
+class Layout:
+    """HUD 고정 그리드 좌표. (w, h) 에서 한 번 계산하고 이후 불변."""
+    margin: int
+    veh_xy: Tuple[int, int]
+    state_xy: Tuple[int, int]
+    bar_x: int
+    bar_w: int
+    bar_cy: int
+    seg_h: int
+    seg_n: int
+    meter_y: int
+    meter_h: int
+    db_right: int
+    db_y: int
+    cap_cy: int
+    # 폰트 크기도 여기서 나온다. 좌표만 모으고 폰트를 렌더러에 남기면 둘이 따로
+    # 놀아 그리드가 어긋난다(차종 104px 자리에 40px 글자가 앉는 식).
+    f_veh: int
+    f_state: int
+    f_db: int
+    f_unit: int
+    f_cap: int
+
+    @classmethod
+    def for_size(cls, w: int, h: int) -> "Layout":
+        margin = round(w * 0.05625)
+        bar_x = round(w * 0.46875)
+        return cls(
+            margin=margin,
+            veh_xy=(margin, round(h * 0.21667)),
+            state_xy=(margin + round(w * 0.003), round(h * 0.55556)),
+            bar_x=bar_x,
+            bar_w=w - bar_x - margin,
+            bar_cy=round(h * 0.41667),
+            seg_h=round(h * 0.09444),
+            seg_n=15,
+            meter_y=round(h * 0.64444),
+            meter_h=max(4, round(h * 0.03333)),
+            db_right=w - margin,
+            db_y=round(h * 0.74444),
+            cap_cy=round(h * 0.89444),
+            f_veh=max(24, round(h * 0.28889)),
+            f_state=max(14, round(h * 0.12222)),
+            f_db=max(12, round(h * 0.08889)),
+            f_unit=max(10, round(h * 0.05278)),
+            f_cap=max(14, round(h * 0.10556)),
+        )
