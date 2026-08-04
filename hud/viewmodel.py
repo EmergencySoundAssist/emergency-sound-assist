@@ -39,43 +39,17 @@ _KO_MOTION = {
     Motion.UNKNOWN: "이동 미상",
 }
 
-# 게이지(시작 음량 대비 상승분) → 접근 중에 쓸 거리 문구의 경계.
-_GAUGE_NEAR = 0.75
-_GAUGE_MID = 0.35
 
+def _level_text(level_db, calibrated) -> Optional[str]:
+    """화면에 낼 음압 숫자. 미보정이면 None.
 
-def _proximity_text(label, gauge, motion) -> Optional[str]:
-    """화면에 띄울 거리 문구.
-
-    detector 의 proximity 는 '이벤트 최고 음량(=최근접) 대비' 값이라, 최근접을
-    지나기 전에는 기준점이 없어 None 이다. 그런데 거리가 가장 궁금한 구간이
-    바로 다가오는 동안이다. 그 구간에서는 게이지(시작 음량 대비 상승분)로
-    문구를 만든다 — 기준점만 다를 뿐 둘 다 '얼마나 가까워졌나'를 잰다.
-
-    다만 '최근접'은 최고점이 확정된 뒤에만 쓴다. 접근 중에는 아무리 가까워도
-    '근접'까지만 말한다 — 아직 더 가까워질 수 있기 때문이다.
-
-    ⚠ 어느 쪽도 미터가 아니다. 마이크 하나로는 음원의 절대 음압을 모르므로
-    절대 거리를 낼 수 없다(docs/approach/design.md).
+    미보정 dBFS 는 운전자에게 의미 없는 숫자다(-4가 큰지 작은지 알 수 없다).
+    'dB' 로만 쓰면 물리 음압으로 읽히니 단위를 속이는 셈이 된다. 미보정에서도
+    미터·글로우는 상대량으로 같은 정보를 전달하므로 숫자만 빼면 된다.
     """
-    if label is not None:
-        return label                      # 최근접을 지난 뒤 — 최고점 대비 값
-    if gauge is None or motion is not Motion.APPROACHING:
+    if level_db is None or not calibrated:
         return None
-    if gauge >= _GAUGE_NEAR:
-        return "근접"
-    return "근거리" if gauge >= _GAUGE_MID else "원거리"
-
-
-def _level_text(level_db) -> Optional[str]:
-    """레벨 문구. 미보정이면 dBFS 임을 그대로 밝힌다.
-
-    'dB' 로만 적으면 물리 음압(dB SPL)으로 읽힌다. 마이크 감도 보정 전에는
-    디지털 풀스케일 기준값이므로 단위를 속이지 않는다.
-    """
-    if level_db is None:
-        return None
-    return f"{level_db:.0f} dB" if SPL_CALIBRATED else f"{level_db:+.0f} dBFS"
+    return f"{level_db:.0f}"
 
 
 @dataclass
@@ -89,20 +63,13 @@ class HudView:
     subtitle: str
     confidence: float
     angle_deg: Optional[float] = None       # 연속 방향각(-90좌~+90우). 없으면 None
-    speed_level: Optional[int] = None       # 접근 빠르기 1~5. 없으면 None
     motion: Motion = Motion.UNKNOWN         # 원본 Motion(렌더러 blink 판단용)
     is_horn: bool = False                   # 경적이면 True → 접근/이동 출력 안 함
-    gauge: Optional[float] = None           # 근접 게이지 0~1 (거리감) → 바 퍼짐 폭·속도
-    # 상대 근접도 라벨. '최근접/근거리/원거리' — 절대 거리(m)가 아니라 이벤트 내
-    # 가장 컸던 순간 대비 위치다. 미터로 읽히지 않게 화면에서도 그대로 쓴다.
-    proximity: Optional[str] = None
-    # 최근접 대비 거리비(≥1.0). 최고점을 지난 뒤에만 값이 있다 — 기준점이 그때
-    # 확정되기 때문. 접근 중에는 None 이고, 이것도 미터가 아니다.
-    rel_distance: Optional[float] = None
     # 사이렌 대역 레벨(dBFS 또는 보정 시 dB SPL). 이벤트 이력과 무관하게 지금
     # 도달한 소리의 세기라, 접근 초반부터 끊김 없이 값이 있다.
     level_db: Optional[float] = None
     level_text: Optional[str] = None        # 화면 문구 — 단위까지 확정된 형태
+    spl_calibrated: bool = False            # 보정됐을 때만 숫자를 낸다
 
     def approach_motion(self) -> Motion:
         """렌더러가 blink 판단에 쓰는 원본 Motion 접근자."""
@@ -119,11 +86,8 @@ class HudView:
         sp = fused.speech
         subtitle = sp.text if (sp is not None and sp.is_speech and sp.text) else ""
         angle_deg = fused.direction.angle_deg
-        speed_level = getattr(fused.approach, "speed_level", None)
-        gauge = getattr(fused.approach, "gauge", None)
         level_db = getattr(fused.approach, "level_db", None)
-        proximity = _proximity_text(
-            getattr(fused.approach, "proximity", None), gauge, fused.approach.motion)
+        calibrated = SPL_CALIBRATED
         is_horn = s.label is SoundClass.HORN
         return cls(
             emergency=s.is_emergency,
@@ -134,12 +98,9 @@ class HudView:
             subtitle=subtitle,
             confidence=s.confidence,
             angle_deg=angle_deg,
-            speed_level=speed_level,
             motion=fused.approach.motion,
             is_horn=is_horn,
-            gauge=gauge,
-            proximity=proximity,
-            rel_distance=getattr(fused.approach, "rel_distance", None),
             level_db=level_db,
-            level_text=_level_text(level_db),
+            level_text=_level_text(level_db, calibrated),
+            spl_calibrated=calibrated,
         )
