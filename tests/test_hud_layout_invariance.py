@@ -10,7 +10,6 @@ import os
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pygame
-import pytest
 
 from core.types import Direction, Motion
 from hud.card import Layout
@@ -84,7 +83,7 @@ def test_bar_row_band_is_identical_across_every_state():
         rows = _lit_rows(surf, lo.bar_x, lo.bar_x + lo.bar_w, top, bot, thresh=260)
         if rows:
             bands[name] = (min(rows), max(rows))
-    assert len(bands) >= 6, "밝은 칸이 있는 상태가 너무 적다 — 테스트가 무의미하다"
+    assert len(bands) == 7, "밝은 칸이 있는 상태 수가 실측(7)과 다르다 — 어떤 상태가 통째로 안 켜졌다"
     spans = set(bands.values())
     assert len(spans) == 1, f"칸 세로 구간이 상태마다 다르다: {bands}"
     assert bands[next(iter(bands))][1] - bands[next(iter(bands))][0] + 1 == lo.seg_h, \
@@ -102,7 +101,7 @@ def test_vehicle_text_starts_at_the_same_x_in_every_state():
               if sum(surf.get_at((x, y))[:3]) > 120]
         if xs:
             lefts[name] = min(xs)
-    assert len(lefts) >= 6
+    assert len(lefts) == 9, "차종 텍스트가 있는 상태 수가 실측(9)과 다르다 — 어떤 상태가 통째로 안 켜졌다"
     assert max(lefts.values()) - min(lefts.values()) <= 6, f"차종 x 가 흔들린다: {lefts}"
 
 
@@ -130,20 +129,24 @@ def test_meter_track_occupies_the_same_place_in_every_state():
 def test_state_text_never_collides_with_the_bar_column():
     """왼쪽 텍스트가 오른쪽 바 영역을 침범하면 두 블록이 겹쳐 읽힌다.
 
-    bar_cy ± seg_h(=test 1 과 같은 값) 구간은 검사에서 뺀다 — 그 자리엔 바
-    자체의 "L" 눈금 라벨이 x0 바로 옆(gutter 안쪽)에 항상 그려진다(디자인
-    의도). 처음엔 이 구간을 포함해서 스캔했다가 모든 상태에서 "충돌"이
-    잡혔는데, 실측해 보니 x=575~579·y=144~157 픽셀이 상태 텍스트가 아니라
-    이 L 라벨 자체였다(색이 MUTED 계열 (71,71,74)). 왼쪽 텍스트 침범이 아니라
-    바 위젯의 정상 구성요소를 오검출한 것이므로 제외한다.
+    처음엔 bar_cy ± seg_h 구간을 통째로 검사에서 뺐다 — 그 높이에서 걸리는
+    "충돌"이 실은 바 자체의 "L" 눈금 라벨(x=574~583, y=144~157, MUTED 색)이라고
+    진단했기 때문이다. 진단은 맞았지만 처방이 과했다: 그 대역은 172행 중 68행
+    (40%)이나 되고 차종 텍스트(y 78~202)의 세로 한가운데를 관통한다 — 즉 상태
+    텍스트가 bar_cy 높이(y 124~176)로 재배치돼 x=621까지 뻗어도 이 테스트는
+    못 본다.
+
+    그래서 행은 하나도 빼지 않고, 대신 x 폭을 L 라벨이 실제로 앉는 자리만큼만
+    좁힌다: x0(_bar_span()의 유일한 계산처) 에서 label_gap(=_draw_bar 가 쓰는
+    lo.margin // 3, 바로 그 표현식) 만큼 왼쪽까지 ~ bar_x 직전. 1280 기준
+    x=584~599. 9개 상태 전부 0건으로 통과함을 확인했다.
     """
     lo = Layout.for_size(W, H)
-    bar_top, bar_bot = lo.bar_cy - lo.seg_h, lo.bar_cy + lo.seg_h
+    x0, _, _, _ = Renderer(HudConfig(fullscreen=False))._bar_span()
     for name, view in STATES.items():
         surf = _render(view)
-        rows = [y for y in range(lo.veh_xy[1], min(H, lo.state_xy[1] + 50))
-                if not (bar_top <= y < bar_bot)]
-        gutter = [x for x in range(lo.bar_x - 30, lo.bar_x)
+        rows = range(lo.veh_xy[1], min(H, lo.state_xy[1] + 50))
+        gutter = [x for x in range(x0 - lo.margin // 3, lo.bar_x)
                   for y in rows
                   if sum(surf.get_at((x, y))[:3]) > 120]
         assert not gutter, f"{name}: 텍스트가 바 영역까지 넘어왔다 (x={sorted(set(gutter))[:5]})"
