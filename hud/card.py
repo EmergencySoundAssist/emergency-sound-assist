@@ -217,3 +217,46 @@ def ripple_brightness(
     ph = (frame % period) / period                 # 0~1 위상
     er = 1.0 + (radius - 1.0) * ph                  # 확장 반경
     return segment_brightness(seg_index, center_index, er) * (1.0 - 0.55 * ph)
+
+
+# ── 음압(dB) → 시각량 ────────────────────────────────────────────────────
+# 보정 여부에 따라 눈금이 다르다. dBFS 는 항상 음수(0=풀스케일)라, dB SPL 범위를
+# 그대로 쓰면 미터가 늘 0 에 붙어 아무 정보도 주지 못한다.
+SPL_RANGE = (55.0, 110.0)      # 보정됨(dB SPL): 조용한 실내 ~ 코앞 사이렌
+DBFS_RANGE = (-55.0, 0.0)      # 미보정(dBFS)  : 풀스케일 기준
+
+# ponytail: 두 범위 모두 어림값이다. 실차 녹음으로 사이렌의 실제 도달 분포를 본 뒤
+# 조정한다 — 도심에서 미터가 늘 절반 이상 차 있으면 눈금을 다시 잡아야 한다.
+
+
+def spl_intensity(level_db: Optional[float], calibrated: bool) -> float:
+    """음압 → 0~1 강도. 값이 없으면 0.0.
+
+    미터 채움·글로우·퍼짐 주기가 전부 이 하나에서 나온다. 화면의 모든 움직임이
+    같은 물리량을 가리키게 하려는 것이다(v2 는 폭·속도·색이 서로 다른 값에 묶여
+    있었다).
+    """
+    if level_db is None:
+        return 0.0
+    lo, hi = SPL_RANGE if calibrated else DBFS_RANGE
+    return max(0.0, min(1.0, (level_db - lo) / (hi - lo)))
+
+
+def spl_to_glow(t: float) -> float:
+    """강도 → 글로우 배수.
+
+    상한을 낮게 잡는다. 세게 주면 켜진 칸들이 한 덩어리로 뭉쳐서, 정작 방향
+    해상도가 음압에 반비례해 떨어지는 역설이 생긴다(v1 목업에서 확인).
+    """
+    return 0.5 + 1.1 * max(0.0, min(1.0, t))
+
+
+def ripple_period_for_spl(t: float) -> int:
+    """강도 → 퍼짐 한 주기 프레임 수. 소리가 클수록 짧다(=빨리 퍼진다).
+
+    ⚠ 하한 RIPPLE_PERIOD_NEAR(11프레임 ≈2.7Hz)는 광과민성 안전선이다. 초당 3회를
+    넘는 점멸은 발작을 유발할 수 있어(WCAG 2.3.1) 음압이 아무리 커도 내려가지
+    않는다. 기존 ripple_period_for_gauge 의 제약을 그대로 승계한다.
+    """
+    t = max(0.0, min(1.0, t))
+    return int(round(RIPPLE_PERIOD_FAR - t * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))

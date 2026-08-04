@@ -457,3 +457,48 @@ def test_closer_source_spreads_wider_at_the_same_phase():
     bright = ripple_brightness(seg, center, spread_for_gauge(1.0),
                                         frame, ripple_period_for_gauge(1.0))
     assert bright > dim
+
+
+# ---------------------------------------------------------------------------
+# 음압 → 시각량 (v3). 미터·글로우·퍼짐이 전부 이 하나에서 나온다.
+# ---------------------------------------------------------------------------
+from hud.card import (
+    SPL_RANGE, DBFS_RANGE, spl_intensity, spl_to_glow, ripple_period_for_spl,
+)
+
+
+def test_spl_intensity_spans_the_calibrated_range():
+    assert spl_intensity(SPL_RANGE[0], calibrated=True) == 0.0
+    assert spl_intensity(SPL_RANGE[1], calibrated=True) == 1.0
+    mid = spl_intensity((SPL_RANGE[0] + SPL_RANGE[1]) / 2, calibrated=True)
+    assert 0.45 < mid < 0.55
+
+
+def test_spl_intensity_uses_a_different_scale_when_uncalibrated():
+    """dBFS 는 항상 음수다. dB SPL 눈금을 쓰면 미터가 늘 0 에 붙는다."""
+    assert spl_intensity(-4.0, calibrated=False) > 0.8      # 풀스케일 근처 = 큼
+    assert spl_intensity(-4.0, calibrated=True) == 0.0      # SPL 눈금에선 범위 밖
+    assert spl_intensity(DBFS_RANGE[0], calibrated=False) == 0.0
+    assert spl_intensity(DBFS_RANGE[1], calibrated=False) == 1.0
+
+
+def test_spl_intensity_clamps_and_handles_missing():
+    assert spl_intensity(None, calibrated=True) == 0.0
+    assert spl_intensity(999.0, calibrated=True) == 1.0
+    assert spl_intensity(-999.0, calibrated=True) == 0.0
+
+
+def test_spl_to_glow_rises_with_level_but_stays_bounded():
+    assert spl_to_glow(0.0) < spl_to_glow(0.5) < spl_to_glow(1.0)
+    assert spl_to_glow(1.0) <= 1.7      # 세게 주면 켜진 칸이 한 덩어리로 뭉친다
+
+
+def test_ripple_period_shortens_as_the_sound_grows():
+    assert ripple_period_for_spl(0.0) > ripple_period_for_spl(1.0)
+
+
+def test_ripple_period_never_crosses_the_photosensitivity_limit():
+    """WCAG 2.3.1 — 초당 3회 초과 점멸은 발작을 유발할 수 있다. 불가침."""
+    for i in range(0, 201):
+        t = (i - 50) / 100.0                 # -0.5 ~ 1.5 (범위 밖 포함)
+        assert ripple_period_for_spl(t) >= 11
