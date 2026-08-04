@@ -13,7 +13,7 @@ Jetson → 워치 BLE 통신 '약속'(프로토콜).
 
 from __future__ import annotations
 
-from core.types import FusedResult, SoundClass, Direction, Motion
+from core.types import Direction, Motion
 
 # 워치와 동일한 고유 식별자. 한 글자라도 다르면 서로 못 알아본다.
 SERVICE_UUID = "e7a10000-2c5f-4b9a-8d3e-1f0a9b8c7d60"
@@ -21,7 +21,6 @@ ALERT_CHAR_UUID = "e7a10001-2c5f-4b9a-8d3e-1f0a9b8c7d60"
 DEVICE_NAME = "EmergencyWatch"
 
 # core.types enum → 바이트 코드 매핑 (워치 enum 의 code 와 동일)
-_SOUND = {SoundClass.NORMAL_TRAFFIC: 0, SoundClass.SIREN: 1, SoundClass.HORN: 2}
 _DIR = {
     Direction.FRONT: 0, Direction.REAR: 1, Direction.LEFT: 2,
     Direction.RIGHT: 3, Direction.UNKNOWN: 0xFF,
@@ -32,17 +31,6 @@ _MOTION = {
 }
 
 
-def encode(fused: FusedResult) -> bytes:
-    """FusedResult → 워치로 보낼 4바이트."""
-    sound = _SOUND.get(fused.sound.label, 0)
-    direction = _DIR.get(fused.direction.direction, 0xFF)
-    motion = _MOTION.get(fused.approach.motion, 0xFF)
-    conf = max(0, min(100, int(round(fused.sound.confidence * 100))))
-    return bytes([sound, direction, motion, conf])
-
-
-# ── approach-loudness 파이프라인용 어댑터 ─────────────────────────────
-# 이 브랜치의 main 은 FusedResult 대신 (AlertEvent, info dict) 를 다룬다.
 # 소리 종류는 매 tick '원시 분류'(info['label'])가 아니라 **디바운스된 경보
 # 상태기계**(ev.kind/level, ONSET/REMIND/CLEAR)를 따른다 — 사이렌 유지 중엔
 # 안정적으로 사이렌 바이트를 보내고, 해제되면 '일반(0)'을 보내 폰이 진동을 멈춘다.
@@ -50,9 +38,14 @@ _KIND_SOUND = {"siren": 1, "horn": 2}
 
 
 def encode_alert(ev, info: dict) -> bytes:
-    """approach-loudness (AlertEvent, info) → 워치로 보낼 4바이트 (encode 와 동일 포맷).
+    """(AlertEvent, info) → 워치로 보낼 4바이트.
+
+    통합 런타임의 출력이 FusedResult 가 아니라 (AlertEvent, info dict) 이므로
+    이것이 유일한 인코더다.
 
     info 키: direction(Direction|None), motion(Motion|None), conf(float 0~1).
+    - motion 은 조건부 융합(pipeline.motion_fusion) 결과다. 속도 단계는 공개 데이터
+      검증에서 기준선 이하라 페이로드에 넣지 않는다 (docs/approach/validation.md).
     - 경보 없음/해제(ev.level == 'NONE')  → sound=0(일반), 폰이 진동 정지.
     - 긴급 아님·워밍업(info 값이 None)     → direction/motion 각각 미상(0xFF).
     """

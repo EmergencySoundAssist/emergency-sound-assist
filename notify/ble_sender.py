@@ -1,6 +1,6 @@
 """
 Jetson = BLE 클라이언트(중앙기기). 워치(GATT 서버)를 찾아 **연결을 계속 유지**하며
-protocol.encode() 가 만든 4바이트를 write 한다.
+protocol.encode_alert() 가 만든 4바이트를 write 한다.
 
 설계 (요구사항 ③ 지연 최소화):
   - 연결은 시작 시 1회 → 끊기면 자동 재연결. 매 전송마다 스캔/연결하지 않음.
@@ -14,7 +14,7 @@ send() 는 그 루프로 페이로드를 넘기는 '동기 → 비동기' 다리
   sender = BleSender()              # 서비스 UUID로 워치 자동 검색
   sender = BleSender(address="AA:BB:..")  # 또는 워치 MAC 직접 지정(더 빠름/확실)
   sender.start()
-  ...  sender.send(fused)  ...
+  ...  sender.send_alert(ev, info)  ...
   sender.close()
 """
 
@@ -25,8 +25,7 @@ import logging
 import threading
 from typing import Optional
 
-from core.types import FusedResult
-from notify.protocol import encode, encode_alert, SERVICE_UUID, ALERT_CHAR_UUID, DEVICE_NAME
+from notify.protocol import encode_alert, SERVICE_UUID, ALERT_CHAR_UUID, DEVICE_NAME
 
 log = logging.getLogger("notify")
 
@@ -57,14 +56,9 @@ class BleSender:
         self._thread = threading.Thread(target=self._thread_main, daemon=True)
         self._thread.start()
 
-    def send(self, fused: FusedResult) -> None:
-        """결과를 워치로 전송(비차단). 직전과 동일하면 보내지 않음."""
-        self._enqueue(encode(fused))
-
     def send_alert(self, ev, info: dict) -> None:
-        """approach-loudness 파이프라인용 전송(비차단). (AlertEvent, info) → 4바이트, 직전과 같으면 스킵.
+        """전송(비차단). (AlertEvent, info) → 4바이트, 직전과 같으면 스킵.
 
-        이 브랜치 main 은 FusedResult 대신 (ev, info) 를 다루므로 send() 대신 이걸 쓴다.
         소리 종류는 디바운스된 경보 상태(ev)를 따른다 — protocol.encode_alert 참고.
         """
         self._enqueue(encode_alert(ev, info))

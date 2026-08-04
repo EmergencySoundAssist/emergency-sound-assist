@@ -52,6 +52,13 @@ python main.py --mic --channels 6 --stt --stt-model medium --view dashboard
 
 통합 실행에서 `ch0`은 분류·차종·접근·STT, `ch1~4`는 방향에 사용하고 `ch5`는 사용하지 않는다.
 
+감지 결과를 워치 진동으로 보내려면 `--ble`을 켠다. 자세한 내용은 아래 BLE 절을 본다.
+
+```bash
+python main.py --mic --channels 6 --ble
+python main.py --mic --channels 6 --stt --stt-model small --ble --view dashboard
+```
+
 ## 3. 입력 장치 확인
 
 ```bash
@@ -191,3 +198,54 @@ python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
 | TensorRT가 목록에 없음 | Jetson용 ONNX Runtime/TensorRT 빌드가 아닌 CPU 패키지일 수 있음 |
 | 차종이 표시되지 않음 | 사이렌 확정 여부와 `subtype_cnn_attn_yt_s42.onnx` 존재 확인 |
 | 시작 직후 결과가 불안정 | 검출·차종·움직임 모델의 5초 창이 아직 채워지는 중 |
+| `[ble] bleak이 없습니다` | `pip install bleak` |
+| BLE가 계속 재연결만 반복 | 폰 GATT 서버가 켜져 있는지, 서비스 UUID가 같은지 확인 |
+
+## 10. BLE 전송 (`--ble`)
+
+Jetson이 BLE 클라이언트(중앙기기)로 동작해 폰(GATT 서버)에 4바이트를 write 하고, 폰이 워치로
+미러링해 진동시킨다. 워치에 직접 연결하지 않는다.
+
+```bash
+sudo apt install -y bluez
+pip install bleak
+```
+
+폰의 GATT 서버를 서비스 UUID로 자동 검색한다.
+
+```bash
+python main.py --mic --channels 6 --ble
+```
+
+자동 검색이 느리거나 실패하면 MAC을 직접 준다. 더 빠르고 확실하다.
+
+```bash
+python main.py --mic --channels 6 --ble --watch-mac AA:BB:CC:DD:EE:FF
+```
+
+먼저 하드웨어 없이 전송 경로만 확인할 수 있다.
+
+```bash
+python main.py --demo --ble
+```
+
+페이로드는 4바이트 고정이며 `notify/protocol.py`와 워치쪽 `AlertProtocol.kt`가 **반드시 같아야
+한다**. 한쪽만 바꾸면 워치가 값을 잘못 읽는다.
+
+| 바이트 | 의미 | 값 |
+|---|---|---|
+| 0 | 소리 | 0=일반, 1=사이렌, 2=경적 |
+| 1 | 방향 | 0=전방, 1=후방, 2=좌, 3=우, 0xFF=미상 |
+| 2 | 움직임 | 0=접근, 1=멀어짐, 2=유지, 0xFF=미상 |
+| 3 | 신뢰도 | 0~100 |
+
+동작 특성:
+
+- 소리 종류는 매 tick 원시 분류가 아니라 **디바운스된 경보 상태기계**(ONSET/REMIND/CLEAR)를
+  따른다. 사이렌 유지 중에는 값이 안정적이고, 해제되면 `0`을 보내 폰이 진동을 멈춘다.
+- 직전과 같은 페이로드는 보내지 않는다(진동·트래픽 폭주 방지).
+- 큐는 최신 1건만 유지하고 Write Without Response를 쓴다(지연 최소화).
+- 연결은 시작 시 1회 맺고 끊기면 자동 재연결한다. 매 전송마다 스캔하지 않는다.
+- BLE 실패가 감지 파이프라인을 멈추지 않는다. 전송만 조용히 생략된다.
+- 움직임 바이트는 조건부 융합 결과다. **속도 단계는 보내지 않는다** —
+  공개 데이터 검증에서 기준선 이하였다([검증 문서](approach/validation.md)).

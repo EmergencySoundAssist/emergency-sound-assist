@@ -160,6 +160,14 @@ def main() -> None:
     # --ble 일 때만 BLE 송신기 시작 (없으면 sender=None → 전송 생략, 지연 import)
     sender = None
     if args.ble:
+        try:
+            import bleak  # noqa: F401 — 시작 시 의존성 확인
+        except ImportError as exc:
+            # 확인하지 않으면 BLE 스레드가 뒤늦게 트레이스백을 뱉고 조용히 죽는다.
+            raise SystemExit(
+                "[ble] bleak이 없습니다. "
+                "먼저 `.venv/bin/python -m pip install bleak`을 실행하세요."
+            ) from exc
         from notify import BleSender
         sender = BleSender(address=args.watch_mac)
         sender.start()
