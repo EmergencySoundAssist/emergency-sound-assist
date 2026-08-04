@@ -72,7 +72,7 @@ def _stt_diag(worker, state: dict) -> None:
         state["dead"] = True
 
 
-def run_stream(chunks, stt_worker=None, hud=None) -> None:
+def run_stream(chunks, stt_worker=None, hud=None, sender=None) -> None:
     pipe = Pipeline(stt_worker=stt_worker)
     stt_state = {"error": None, "dropped": 0, "dead": False}
     try:
@@ -80,16 +80,20 @@ def run_stream(chunks, stt_worker=None, hud=None) -> None:
             fused = pipe.process(chunk)
             print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
             _stt_diag(stt_worker, stt_state)
+            if sender is not None:       # BLE: 폰(→워치 미러링)으로 전송
+                sender.send_fused(fused)
             if hud is not None:
                 hud.update(fused)
                 if hud.stopped:          # HUD 창이 닫히면 파이프라인도 종료
                     break
     finally:
+        if sender is not None:
+            sender.close()
         if stt_worker is not None:
             stt_worker.stop()
 
 
-def _run_with_hud(source, stt_worker, args) -> None:
+def _run_with_hud(source, stt_worker, args, sender=None) -> None:
     """--hud: 파이프라인을 백그라운드 스레드로, pygame 렌더 루프를 메인 스레드에서."""
     try:
         from hud.config import HudConfig
@@ -97,7 +101,7 @@ def _run_with_hud(source, stt_worker, args) -> None:
     except ImportError as e:
         print(f"[hud] pygame 미설치 — HUD 없이 콘솔로 계속: {e}\n"
               "  설치: pip install pygame", file=sys.stderr)
-        run_stream(source, stt_worker)
+        run_stream(source, stt_worker, sender=sender)
         return
 
     import threading
@@ -106,7 +110,7 @@ def _run_with_hud(source, stt_worker, args) -> None:
     # --demo/--wav처럼 유한 소스면 파이프라인 스레드는 소스 소진 시 끝나지만, HUD 창은
     # 의도적으로 ESC/Q 입력 전까지 마지막 프레임을 유지한다 (daemon 스레드라 종료를 막지 않음).
     worker = threading.Thread(
-        target=run_stream, args=(source, stt_worker, hud),
+        target=run_stream, args=(source, stt_worker, hud, sender),
         name="pipeline", daemon=True)
     worker.start()
     try:
@@ -138,6 +142,10 @@ def main() -> None:
                     help="HUD를 창 모드로(노트북 개발용). --hud 와 함께.")
     ap.add_argument("--hud-flip", action="store_true",
                     help="HUD 반사(윈드실드) 모드 — 상하반전 시작. 런타임 F키로 토글.")
+    ap.add_argument("--ble", action="store_true",
+                    help="감지 결과를 BLE로 폰(→워치 미러링 진동)에 전송 (bleak 필요). --hud 와 함께 쓸 수 있다.")
+    ap.add_argument("--watch-mac", default=None,
+                    help="BLE 대상 MAC 직접 지정(미지정 시 서비스 UUID로 폰 자동 검색)")
     args = ap.parse_args()
 
     stt_worker = None
@@ -152,6 +160,22 @@ def main() -> None:
         stt_worker.start()
         print(f"[stt] 평상시 자막 ON (모델 {cfg.model_size}, 백그라운드 스레드) — 사이렌·경적일 땐 자동 멈춤")
 
+    # --ble 일 때만 BLE 송신기 시작 (없으면 sender=None → 전송 생략, 지연 import)
+    sender = None
+    if args.ble:
+        try:
+            import bleak  # noqa: F401 — 시작 시 의존성 확인
+        except ImportError as exc:
+            # 확인하지 않으면 BLE 스레드가 뒤늦게 트레이스백을 뱉고 조용히 죽는다.
+            raise SystemExit(
+                "[ble] bleak이 없습니다. "
+                "먼저 `.venv/bin/python -m pip install bleak`을 실행하세요."
+            ) from exc
+        from notify import BleSender
+        sender = BleSender(address=args.watch_mac)
+        sender.start()
+        print("== BLE: 전송 활성화 (폰 GATT 서버를 서비스 UUID로 검색) ==")
+
     if args.demo:
         print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
         source = iter_chunks_from_array(_synth_passby())
@@ -163,9 +187,9 @@ def main() -> None:
         source = iter_chunks_from_mic(device=args.device, channels=args.channels)
 
     if args.hud:
-        _run_with_hud(source, stt_worker, args)
+        _run_with_hud(source, stt_worker, args, sender)
     else:
-        run_stream(source, stt_worker)
+        run_stream(source, stt_worker, sender=sender)
 
 
 if __name__ == "__main__":

@@ -464,18 +464,50 @@ def test_pipeline_resets_stt_only_on_emergency_transition(monkeypatch):
     monkeypatch.setattr(runner_mod.Pipeline, "_fuse", lambda self, acoustic: acoustic)
 
     worker = _ResetCountingWorker()
-    pipe = Pipeline(stt_worker=worker)
+    clock = {"t": 0.0}
+    pipe = Pipeline(stt_worker=worker, emergency_hangover=2.0, clock=lambda: clock["t"])
     chunk = AudioChunk(samples=np.zeros(SAMPLE_RATE, dtype=np.float32),
                        sample_rate=SAMPLE_RATE)
 
     pipe.process(chunk)
+    clock["t"] = 1.0
     pipe.process(chunk)                      # 긴급 지속 — 추가 reset 없어야 한다
     assert worker.resets == 1
     emergency["on"] = False
-    pipe.process(chunk)                      # 평상 복귀
+    clock["t"] = 4.0                         # 잔향(2초) 지난 뒤라야 실제 평상 복귀
+    pipe.process(chunk)
     emergency["on"] = True
+    clock["t"] = 5.0
     pipe.process(chunk)                      # 다시 긴급 진입 edge
     assert worker.resets == 2
+
+
+def test_pipeline_debounce_holds_emergency_through_flicker(monkeypatch):
+    """분류가 한 청크 튀어도 긴급을 유지한다 — 폰 진동은 끊김을 몸이 바로 느낀다."""
+    import pipeline.runner as runner_mod
+    from core.types import ClassResult, SoundClass, DirectionResult, Direction
+
+    emergency = {"on": True}
+    monkeypatch.setattr(
+        runner_mod, "classify",
+        lambda chunk: ClassResult.from_label(
+            SoundClass.SIREN if emergency["on"] else SoundClass.NORMAL_TRAFFIC, 0.9),
+    )
+    monkeypatch.setattr(runner_mod.Pipeline, "_direction",
+                        lambda self, chunk: DirectionResult(direction=Direction.UNKNOWN))
+    monkeypatch.setattr(runner_mod.Pipeline, "_fuse", lambda self, acoustic: acoustic)
+
+    clock = {"t": 0.0}
+    pipe = Pipeline(emergency_hangover=2.0, clock=lambda: clock["t"])
+    chunk = AudioChunk(samples=np.zeros(SAMPLE_RATE, dtype=np.float32),
+                       sample_rate=SAMPLE_RATE)
+
+    assert pipe.process(chunk).sound.label is SoundClass.SIREN
+    emergency["on"] = False                                      # 한 청크 깜빡임
+    clock["t"] = 1.0
+    assert pipe.process(chunk).sound.label is SoundClass.SIREN   # 잔향이 메운다
+    clock["t"] = 3.0                                             # 잔향 만료
+    assert pipe.process(chunk).sound.label is SoundClass.NORMAL_TRAFFIC
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,10 @@ pyusb>=1.2               # ReSpeaker USB 제어 (자체 DoA 레지스터 + LED)
 # ── ③ HUD 출력 (hud) ──────────────────────────────────
 pygame>=2.1              # ④+ HUD 화면 출력(SDL2). aarch64/Jetson 휠 제공. 한글 폰트: apt install fonts-nanum
 
+# ── ③ 전송 (notify, --ble 일 때만) ───────────────────
+bleak>=0.21              # Jetson=BLE 클라이언트 → 폰(GATT 서버) → 워치 진동
+                         #   ※ Linux/Jetson: BlueZ 필요 (sudo apt install bluez)
+
 # ── 개발 ─────────────────────────────────────────────
 pytest>=7.0
 
