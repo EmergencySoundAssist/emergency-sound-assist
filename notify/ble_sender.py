@@ -57,19 +57,23 @@ class BleSender:
         self._thread.start()
 
     def send_alert(self, ev, info: dict) -> None:
-        """전송(비차단). (AlertEvent, info) → 4바이트, 직전과 같으면 스킵.
+        """전송(비차단). (AlertEvent, info) → 4바이트, 직전과 상황이 같으면 스킵.
 
         소리 종류는 디바운스된 경보 상태(ev)를 따른다 — protocol.encode_alert 참고.
         """
         self._enqueue(encode_alert(ev, info))
 
     def _enqueue(self, payload: bytes) -> None:
-        """4바이트를 BLE 스레드로 넘긴다(비차단). 직전과 같으면 스킵.
+        """4바이트를 BLE 스레드로 넘긴다(비차단). 직전과 상황이 같으면 스킵.
 
         스레드/루프가 아직 없거나 이미 닫혔으면 조용히 무시한다 —
         BLE 실패(예: bleak 미설치·어댑터 문제)가 감지 파이프라인을 멈추지 않게 한다.
         """
-        if payload == self._last:               # 같은 상황 반복 → 스킵(진동/트래픽 폭주 방지)
+        # 상황 3바이트(소리·방향·움직임)가 같으면 보내지 않는다.
+        # 신뢰도(byte3)까지 비교하면 매 tick 1%씩 흔들려 중복 제거가 무력화되고,
+        # 워치가 write 마다 vibrator.cancel() 후 재생하므로 방향 리듬(640~920ms)이
+        # 매번 잘려 좌측↔전방·우측↔후방이 구분되지 않는다. (watch-app VibrationEngine)
+        if self._last is not None and payload[:3] == self._last[:3]:
             return
         loop = self._loop
         if loop is None or self._queue is None or loop.is_closed():

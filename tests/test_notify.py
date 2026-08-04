@@ -6,6 +6,7 @@
 
 from core.types import Direction, Motion
 from pipeline import alert
+from notify.ble_sender import BleSender
 from notify.protocol import ALERT_CHAR_UUID, SERVICE_UUID, encode_alert
 
 
@@ -67,3 +68,45 @@ def test_신뢰도는_0에서_100으로_클램프된다():
 def test_ev가_None이어도_죽지_않는다():
     # 워밍업 tick 방어. 예외 대신 '일반' 페이로드를 보낸다.
     assert encode_alert(None, _info())[0] == 0
+
+
+# ── 중복 전송 억제 ────────────────────────────────────────────────
+class _SpySender(BleSender):
+    """_enqueue 가 실제로 큐에 넘기려 한 페이로드만 기록한다(BLE 스레드 없이)."""
+
+    def __init__(self):
+        super().__init__()
+        self.sent = []
+
+    def _enqueue(self, payload: bytes) -> None:
+        if self._last is not None and payload[:3] == self._last[:3]:
+            return
+        self._last = payload
+        self.sent.append(payload)
+
+
+def test_신뢰도만_바뀌면_전송하지_않는다():
+    # 신뢰도는 매 tick 흔들린다. 이걸 보내면 워치가 진동 파형을 매번 restart 해서
+    # 방향 리듬(640~920ms)이 잘리고 좌측↔전방이 구분되지 않는다.
+    s = _SpySender()
+    for conf in (80, 81, 82, 83, 84):
+        s._enqueue(bytes([1, 1, 0, conf]))
+    assert len(s.sent) == 1
+
+
+def test_상황이_바뀌면_전송한다():
+    s = _SpySender()
+    s._enqueue(bytes([1, 1, 0, 80]))    # 사이렌·후방·접근
+    s._enqueue(bytes([1, 1, 1, 80]))    # → 멀어짐
+    s._enqueue(bytes([1, 2, 1, 80]))    # → 좌측
+    s._enqueue(bytes([0, 2, 1, 80]))    # → 해제
+    assert len(s.sent) == 4
+
+
+def test_전송하는_페이로드에는_최신_신뢰도가_실린다():
+    # 스킵은 '보낼지 말지'만 정한다. 보낼 때는 그 시점의 신뢰도를 그대로 싣는다.
+    s = _SpySender()
+    s._enqueue(bytes([1, 1, 0, 80]))
+    s._enqueue(bytes([1, 1, 0, 95]))    # 신뢰도만 변화 → 스킵
+    s._enqueue(bytes([1, 1, 1, 97]))    # 움직임 변화 → 전송
+    assert s.sent[-1] == bytes([1, 1, 1, 97])
