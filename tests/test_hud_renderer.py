@@ -103,6 +103,37 @@ def test_uncalibrated_view_draws_no_number():
     assert all(sum(c) < 60 for c in band), "미보정인데 숫자가 그려졌다"
 
 
+def test_rear_and_unknown_do_not_render_identically():
+    """후방과 방향 미상이 같은 화면이면 HUD 가 모르는 방향을 단정하는 것이다.
+
+    direction_to_index 는 REAR·UNKNOWN 을 둘 다 중앙 칸(7)으로 보낸다 — 칸만으로는
+    영원히 구분되지 않는다. DoA 하드웨어가 없으면 UNKNOWN 이 오히려 정상 상태라,
+    문구가 방향을 말해 주지 않으면 소리를 못 듣는 운전자는 뒤를 볼 이유가 없는데도
+    뒤를 본다. 픽셀이 달라야 한다.
+    """
+    rear = _render(_view(direction=Direction.REAR, direction_text="후방"))
+    unknown = _render(_view(direction=Direction.UNKNOWN, direction_text="방향 미상"))
+    lo = Layout.for_size(1280, 360)
+    rows = range(lo.state_xy[1], min(360, lo.state_xy[1] + lo.f_state))
+    diff = [(x, y) for y in rows for x in range(lo.margin, lo.bar_x)
+            if rear.get_at((x, y))[:3] != unknown.get_at((x, y))[:3]]
+    assert diff, "후방과 방향 미상이 픽셀까지 동일하다 — 모르는 방향을 단정하고 있다"
+
+
+def test_uncalibrated_draws_no_number_even_if_level_text_is_set():
+    """미보정인데 level_text 가 채워진 뷰가 와도 숫자를 그리지 않는다(이중 방어).
+
+    viewmodel._level_text 하나에만 의존하면, 뷰를 다른 경로로 만든 순간 렌더러가
+    " dB" 를 붙여 있지도 않은 물리 단위를 지어낸다.
+    """
+    lo = Layout.for_size(1280, 360)
+    surf = _render(_view(level_text="97", spl_calibrated=False))
+    band = [surf.get_at((x, y))[:3]
+            for y in range(lo.db_y, min(360, lo.db_y + 34))
+            for x in range(lo.db_right - 140, lo.db_right)]
+    assert all(sum(c) < 60 for c in band), "미보정인데 숫자가 그려졌다"
+
+
 def test_front_lights_no_segment_but_still_marks_itself():
     """전방은 칸을 켜지 않는다. 그래도 '감지 없음'과 구분돼야 한다."""
     lo = Layout.for_size(1280, 360)

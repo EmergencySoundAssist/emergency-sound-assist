@@ -49,6 +49,15 @@ STATES = {
 
 
 def _render(view, frames=3):
+    """frames=3 은 의도적이다 — 늘리지 말 것.
+
+    접근 중 상태는 ripple 이 돌고 주기가 음압마다 다르다(15~28프레임). frames 를
+    20/22/24 로 두면 어떤 상태는 하필 위상이 어두운 지점에 걸려 칸 밝기가 임계값
+    260 밑으로 내려가고, `len(bands) == 7` 이 "어떤 상태가 통째로 안 켜졌다"며
+    실패한다 — 정작 이 파일이 지키려는 불변식(칸 세로 구간 (133,166))은 멀쩡한데
+    말이다. 3 은 모든 주기에서 위상이 아직 밝은 구간이라 9개 상태가 같은 조건으로
+    비교된다. 밝기가 아니라 '좌표가 안 움직인다'를 재는 파일이므로 이걸로 충분하다.
+    """
     pygame.init()
     surf = pygame.Surface((W, H))
     r = Renderer(HudConfig(fullscreen=False))
@@ -88,6 +97,42 @@ def test_bar_row_band_is_identical_across_every_state():
     assert len(spans) == 1, f"칸 세로 구간이 상태마다 다르다: {bands}"
     assert bands[next(iter(bands))][1] - bands[next(iter(bands))][0] + 1 == lo.seg_h, \
         "잡힌 구간 높이가 Layout.seg_h 와 다르다"
+
+
+def test_lit_cell_count_does_not_grow_with_loudness():
+    """음압이 커져도 '켜진 칸 수'가 같아야 한다 = 클러스터 폭 불변.
+
+    위 테스트는 세로 밴드만 본다 — 삭제된 spread_for_gauge(음압이 클수록 클러스터를
+    옆으로 넓히던 것)가 되살아나도 통과해 버린다. 이 개편의 목적 자체가 '기하가
+    움직이지 않는다'이므로 가로도 못박는다.
+
+    칸 경계는 픽셀 리터럴이 아니라 _bar_span()(칸 피치의 유일한 계산처)에서 받는다.
+    임계값 260 은 위 테스트와 같은 이유다: 글로우 헤일로를 칸으로 잘못 세지 않으면서
+    순색 칸(sum>=333)만 잡는다. 헤일로는 음압에 따라 번지는 폭이 달라 140 같은
+    값으로는 폭 회귀와 구분되지 않는다.
+
+    칸 '전체'가 아니라 가운데 열만 본다. 실측하면 97dB 에서 이웃 칸의 헤일로가
+    옆칸 가장자리를 sum=264 까지 밀어 올려 260 을 넘긴다 — 칸이 아니라 번짐인데
+    칸으로 세어 66/79/97 이 1/1/2 로 갈린다(거짓 실패). 가운데 열은 기하학적으로
+    안전하다: 이웃 글로우는 pad(<=16px) 만큼만 넘어와 칸 시작+24 까지 닿고,
+    가운데는 시작+seg_w//2(=16) 라 8px 여유가 있다. 가운데 열 실측값은
+    66/79/97 모두 [.. 216, 336, 216 ..] 로 중심 칸 하나만 260 을 넘는다.
+    """
+    lo = Layout.for_size(W, H)
+    r = Renderer(HudConfig(fullscreen=False))
+    x0, _, seg_w, gap = r._bar_span()
+
+    def lit_cells(spl):
+        surf = _render(_view(level_db=spl, level_text=f"{spl:.0f}"))
+        return sum(
+            1 for i in range(lo.seg_n)
+            if sum(surf.get_at((x0 + i * (seg_w + gap) + seg_w // 2,
+                                lo.bar_cy))[:3]) > 260
+        )
+
+    counts = {spl: lit_cells(spl) for spl in (66.0, 79.0, 97.0)}
+    assert len(set(counts.values())) == 1, f"음압에 따라 켜진 칸 수가 변한다: {counts}"
+    assert all(c > 0 for c in counts.values()), f"어느 음압에서도 칸이 안 켜졌다: {counts}"
 
 
 def test_vehicle_text_starts_at_the_same_x_in_every_state():

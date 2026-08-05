@@ -223,6 +223,12 @@ class Layout:
     def for_size(cls, w: int, h: int) -> "Layout":
         margin = round(w * 0.05625)
         bar_x = round(w * 0.46875)
+        # f_veh 는 h 로, 텍스트 칸 폭은 w 로 자란다 — 세로가 긴 화면에서 차종 글자가
+        # 바 영역을 침범한다(1280×720 의 "구급차", 800×480 의 모든 문구). 텍스트 칸
+        # (bar_x - margin)에 맞춰 상한을 건다. 나누는 수 4.0 은 최장 문구 "긴급차량"
+        # 의 폭÷폰트크기(≈3.48)에 L 라벨 gutter(margin//3) 여유를 더한 값이다.
+        # 1280×360 에선 528/4.0=132 > 104 라 기준 해상도 값은 그대로 104.
+        f_veh = max(24, min(round(h * 0.28889), round((bar_x - margin) / 4.0)))
         return cls(
             margin=margin,
             veh_xy=(margin, round(h * 0.21667)),
@@ -237,7 +243,7 @@ class Layout:
             db_right=w - margin,
             db_y=round(h * 0.74444),
             cap_cy=round(h * 0.89444),
-            f_veh=max(24, round(h * 0.28889)),
+            f_veh=f_veh,
             f_state=max(14, round(h * 0.12222)),
             f_db=max(12, round(h * 0.08889)),
             f_unit=max(10, round(h * 0.05278)),

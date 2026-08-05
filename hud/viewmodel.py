@@ -68,7 +68,7 @@ class HudView:
     # 사이렌 대역 레벨(dBFS 또는 보정 시 dB SPL). 이벤트 이력과 무관하게 지금
     # 도달한 소리의 세기라, 접근 초반부터 끊김 없이 값이 있다.
     level_db: Optional[float] = None
-    level_text: Optional[str] = None        # 화면 문구 — 단위까지 확정된 형태
+    level_text: Optional[str] = None        # 화면에 낼 숫자만("97"). 단위는 렌더러가 붙인다
     spl_calibrated: bool = False            # 보정됐을 때만 숫자를 낸다
 
     def approach_motion(self) -> Motion:

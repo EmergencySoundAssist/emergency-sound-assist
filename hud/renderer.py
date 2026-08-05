@@ -131,9 +131,12 @@ class Renderer:
 
         surface.blit(self._f_veh.render(view.sound_text, True, FG), lo.veh_xy)
         front = not self._bar_visible(view)
-        state = f"{view.direction_text} · {view.motion_text}" if front else view.motion_text
-        if getattr(view, "is_horn", False):
-            state = view.direction_text
+        # 방향은 항상 문구로 낸다. 칸만으로는 후방과 방향 미상을 구분할 수 없다 —
+        # direction_to_index 가 둘 다 중앙(7)이라 픽셀이 완전히 같아진다. 문구가
+        # 없으면 방향을 모를 때도 "후방에서 온다"고 단정하는 화면이 되는데, 소리를
+        # 못 듣는 운전자에게 이 화면이 유일한 경고다. 모르면 모른다고 써야 한다.
+        state = view.direction_text if getattr(view, "is_horn", False) \
+            else f"{view.direction_text} · {view.motion_text}"
         surface.blit(self._f_state.render(state, True, color), lo.state_xy)
 
         if front:
@@ -150,7 +153,10 @@ class Renderer:
                                getattr(view, "is_horn", False), view.approach_motion()))
 
         self._draw_meter(surface, color, t)
-        if view.level_text:
+        # spl_calibrated 를 여기서도 본다(viewmodel._level_text 와 이중 방어).
+        # _draw_db 는 " dB" 를 무조건 붙이므로, 한 곳만 지키면 뷰가 잘못 만들어졌을 때
+        # 없는 단위를 지어내 출력한다 — '단위를 속이지 않는다'는 제약의 핵심이다.
+        if view.level_text and view.spl_calibrated:
             self._draw_db(surface, view.level_text, color)
         if view.subtitle:
             lines = hud_card.wrap_text(

@@ -89,7 +89,7 @@ def _view(direction, angle_deg=None, subtitle="", sound="구급차"):
 
 
 def test_render_current_state_no_crash():
-    """현재 상태(angle/speed None): 성능저하 카드가 크래시 없이 그려진다."""
+    """angle_deg 없음(이산 방향 폴백): 긴급 카드가 크래시 없이 그려진다."""
     import pygame
     from core.types import Direction
     r, surf = _renderer_and_surface()
@@ -99,7 +99,7 @@ def test_render_current_state_no_crash():
 
 
 def test_render_future_state_no_crash():
-    """미래 상태(angle·speed 채움): 완전 카드가 크래시 없이 렌더."""
+    """angle_deg 있음(DoA 연속 각도): 긴급 카드가 크래시 없이 렌더."""
     import pygame
     from core.types import Direction
     r, surf = _renderer_and_surface()
@@ -434,8 +434,36 @@ def test_layout_scales_to_other_sizes():
     assert small.bar_w > 0 and small.seg_h > 0
 
 
+SUITE_SIZES = [(1280, 360), (1280, 720), (640, 180), (1920, 540), (800, 480), (320, 180)]
+
+
+def test_vehicle_text_fits_the_gutter_at_every_size_the_suite_renders():
+    """차종 글자가 바 영역을 침범하면 안 된다 — 어느 해상도에서도.
+
+    f_veh 는 h 로, 텍스트 칸은 w 로 자란다. 세로가 긴 화면에서 둘이 어긋나
+    1280×720 의 "구급차"(x=612, 바 x0=608), 800×480 의 모든 문구가 바를 덮었다.
+    프로덕션 기본값은 360 이라 출고는 안전했지만 테스트 스위트가 그 깨진 영역을
+    렌더하고 있었다. 경계는 _bar_span() 의 x0 에서 L 라벨 자리(margin//3)만큼
+    왼쪽 — test_state_text_never_collides_with_the_bar_column 이 쓰는 것과 같은 식.
+    """
+    import pygame
+    from hud.config import HudConfig
+    from hud.renderer import Renderer, load_font
+    pygame.init()
+    # _draw_emergency 의 sound_text 후보 + _draw_normal 의 고정 문구
+    texts = ["구급차", "경찰차", "소방차", "긴급차량", "사이렌", "경적", "듣는 중"]
+    for w, h in SUITE_SIZES:
+        lo = Layout.for_size(w, h)
+        x0, _, _, _ = Renderer(HudConfig(width=w, height=h, fullscreen=False))._bar_span()
+        gutter = x0 - lo.margin // 3
+        f = load_font(lo.f_veh)
+        for t in texts:
+            end = lo.veh_xy[0] + f.size(t)[0]
+            assert end < gutter, f"{w}x{h} '{t}': 차종 글자가 x={end} 까지 뻗어 바(gutter {gutter})를 침범"
+
+
 def test_layout_bar_stays_inside_the_screen():
-    for w, h in [(1280, 360), (640, 180), (1920, 540), (800, 480)]:
+    for w, h in SUITE_SIZES:
         lo = Layout.for_size(w, h)
         assert lo.bar_x >= 0
         assert lo.bar_x + lo.bar_w <= w
