@@ -8,11 +8,13 @@
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 
 import pygame
 
+from core.types import Direction
 from hud import card as hud_card
 from hud.card import Layout
 
@@ -43,8 +45,9 @@ def vehicle_color(sound_text: str) -> tuple:
 
 # LED 스트립 디자인 확정값 (디자인 스튜디오에서 튜닝)
 # 세그먼트 높이·글로우 배수는 이제 Layout.seg_h / card.spl_to_glow 가 정한다.
-SPREAD = 2              # 정적 점등 반경 — 방향만 나타낸다(음압과 무관)
-RIPPLE_RADIUS = 4       # 퍼짐이 도달하는 최대 반경. 밝기만 번지고 칸은 불변
+CAR_BODY = (50, 54, 66)     # 레이더 중앙 차 실루엣
+CAR_EDGE = (94, 98, 114)
+CAR_LAMP = (150, 155, 175)  # 헤드라이트 — 앞이 어느 쪽인지 알려준다
 
 
 def _glow_segment(surface, x, y, w, h, color, b, glow=1.0):
@@ -156,39 +159,23 @@ class Renderer:
             self._draw_normal(target, view, w, h)
 
     def _draw_emergency(self, surface, view, w, h):
-        """고정 그리드: 왼쪽 텍스트 / 오른쪽 바+미터. 좌표는 Layout 에서만 온다."""
+        """3열: 왼쪽 무엇(차종·상태) / 가운데 어디(레이더) / 오른쪽 얼마나(dB)."""
         self._frame = (self._frame + 1) % 100000
         lo = self._lo
         color = vehicle_color(view.sound_text)
         t = hud_card.spl_intensity(view.level_db, view.spl_calibrated)
 
         surface.blit(self._f_veh.render(view.sound_text, True, FG), lo.veh_xy)
-        front = not self._bar_visible(view)
-        # 방향은 항상 문구로 낸다. 칸만으로는 후방과 방향 미상을 구분할 수 없다 —
-        # direction_to_index 가 둘 다 중앙(7)이라 픽셀이 완전히 같아진다. 문구가
-        # 없으면 방향을 모를 때도 "후방에서 온다"고 단정하는 화면이 되는데, 소리를
-        # 못 듣는 운전자에게 이 화면이 유일한 경고다. 모르면 모른다고 써야 한다.
+        # 방향은 항상 문구로 낸다. 아크가 방향을 보여주지만, 아크만으로는 '모른다'와
+        # '어느 방향이다'의 차이가 약하다. 소리를 못 듣는 운전자에게 이 화면이 유일한
+        # 경고라 모르면 모른다고 써야 한다.
         state = view.direction_text if getattr(view, "is_horn", False) \
             else f"{view.direction_text} · {view.motion_text}"
         surface.blit(self._f_state.render(state, True, color), lo.state_xy)
 
-        if front:
-            self._draw_bar(surface, color, 0, t, lit=False)
-            mark = self._f_unit.render("▲ 전방", True, color)
-            x0, total, _, _ = self._bar_span()
-            # 칸 '위'에 띄운다 — 칸을 덮으면 고정 그리드가 깨져 보인다.
-            # 간격도 Layout(칸 높이)에서 나온다: 화면이 커지면 같이 벌어진다.
-            surface.blit(mark, mark.get_rect(
-                midbottom=(x0 + total // 2, lo.bar_cy - lo.seg_h)))
-        else:
-            self._draw_bar(surface, color, self._bar_center(view), t,
-                           ripple=hud_card.should_ripple(
-                               getattr(view, "is_horn", False), view.approach_motion()))
-
-        self._draw_meter(surface, color, t)
+        self._draw_radar(surface, color, t, view.direction)
         # spl_calibrated 를 여기서도 본다(viewmodel._level_text 와 이중 방어).
-        # _draw_db 는 " dB" 를 무조건 붙이므로, 한 곳만 지키면 뷰가 잘못 만들어졌을 때
-        # 없는 단위를 지어내 출력한다 — '단위를 속이지 않는다'는 제약의 핵심이다.
+        # 한 곳만 지키면 뷰가 잘못 만들어졌을 때 없는 단위를 지어내 출력한다.
         if view.level_text and view.spl_calibrated:
             self._draw_db(surface, view.level_text, color)
         if view.subtitle:
@@ -197,80 +184,80 @@ class Renderer:
                 w - 2 * lo.margin, max_lines=2)
             self._center_multiline(surface, lines, self._f_cap, FG, w // 2, lo.cap_cy)
 
-    def _bar_visible(self, view) -> bool:
-        if view.angle_deg is not None:
-            return hud_card.azimuth_to_bar_index(view.angle_deg, self._lo.seg_n) is not None
-        return hud_card.direction_visible(view.direction)
+    def _arc(self, surface, ring, a0, a1, color, width, alpha=None):
+        """레이더 링 하나의 호. alpha 를 주면 글로우용으로 반투명하게 겹쳐 그린다."""
+        lo = self._lo
+        pad = lo.ring_w // 2 + ring * lo.ring_gap
+        box = pygame.Rect(lo.radar_cx - lo.radar_rx - pad, lo.radar_cy - lo.radar_ry - pad,
+                          (lo.radar_rx + pad) * 2, (lo.radar_ry + pad) * 2)
+        a0, a1 = math.radians(a0), math.radians(a1)
+        if alpha is None:
+            pygame.draw.arc(surface, color, box, a0, a1, width)
+            return
+        g = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        pygame.draw.arc(g, (*color, alpha), box, a0, a1, width)
+        surface.blit(g, (0, 0))
 
-    def _bar_center(self, view) -> int:
-        if view.angle_deg is not None:
-            idx = hud_card.azimuth_to_bar_index(view.angle_deg, self._lo.seg_n)
-            if idx is not None:
-                return idx
-        return hud_card.direction_to_index(None, view.direction, self._lo.seg_n)
+    def _draw_radar(self, surface, color, t, direction):
+        """방향 = 어느 아크가 켜지는가, 음압 = 몇 링이 차오르는가.
 
-    def _bar_span(self):
-        """칸 피치(칸 폭·간격)의 유일한 계산처 — x0, 전체 폭, 칸 폭, 간격.
-
-        여기서만 계산해야 한다: 두 곳에서 따로 계산하면 한쪽만 바뀔 때 칸과
-        L/R 라벨이 어긋난다.
+        꺼진 링도 흐리게 그린다 — 안 그리면 '5칸 중 3칸'이라는 척도가 사라지고
+        그냥 크기만 변하는 것으로 보인다.
         """
         lo = self._lo
-        seg_w = int(lo.bar_w / (lo.seg_n + (lo.seg_n - 1) * 0.28))
-        gap = int(seg_w * 0.28)
-        total = lo.seg_n * seg_w + (lo.seg_n - 1) * gap
-        return lo.bar_x + (lo.bar_w - total) // 2, total, seg_w, gap
+        levels = hud_card.ring_levels(t, hud_card.RINGS)
+        span = hud_card.arc_span(direction)
+        for d, (a0, a1) in hud_card.ARC_SPANS.items():
+            on = (span is not None and d is direction)
+            unknown = (span is None)
+            for r, lv in enumerate(levels):
+                if (on or unknown) and lv > 0:
+                    b = lv * (1.0 - r * 0.10)
+                    if unknown:
+                        # 모를 땐 네 방향을 똑같이, 그러나 약하게 — 한 곳을 단정하지 않는다
+                        b *= 0.42
+                    self._arc(surface, r, a0, a1, color, lo.ring_w + 4, alpha=int(52 * b))
+                    self._arc(surface, r, a0, a1,
+                              tuple(int(c * b) for c in color), lo.ring_w)
+                else:
+                    self._arc(surface, r, a0, a1, DIM, lo.ring_w)
+        self._draw_car(surface)
 
-    def _draw_bar(self, surface, color, center, t, lit=True, ripple=False):
-        """고정 그리드 LED. 칸의 위치·크기는 불변, 밝기만 바뀐다."""
+    def _draw_car(self, surface):
+        """위에서 본 차. 앞이 좁고 헤드라이트가 있어 도형만으로 앞뒤가 읽힌다."""
         lo = self._lo
-        x0, total, seg_w, gap = self._bar_span()
-        y = lo.bar_cy - lo.seg_h // 2
-        glow = hud_card.spl_to_glow(t)
-        period = hud_card.ripple_period_for_spl(t)
-        for i in range(lo.seg_n):
-            if not lit:
-                b = 0.0
-            elif ripple:
-                b = hud_card.ripple_brightness(i, center, RIPPLE_RADIUS,
-                                               self._frame, period)
-            else:
-                b = hud_card.segment_brightness(i, center, SPREAD)
-            _glow_segment(surface, x0 + i * (seg_w + gap), y, seg_w, lo.seg_h,
-                          color, b, glow)
-        label_gap = lo.margin // 3   # margin 의 1/3 — 1280px 기준 기존 24px 그대로
-        ll = self._f_unit.render("L", True, MUTED)
-        surface.blit(ll, (x0 - ll.get_width() - label_gap, lo.bar_cy - ll.get_height() // 2))
-        rl = self._f_unit.render("R", True, MUTED)
-        surface.blit(rl, (x0 + total + label_gap, lo.bar_cy - rl.get_height() // 2))
-
-    def _draw_meter(self, surface, color, t):
-        """음압 고정 트랙 미터. 트랙 길이는 불변, 채워지는 길이만 변한다."""
-        lo = self._lo
-        x0, total, _, _ = self._bar_span()
-        pygame.draw.rect(surface, DIM, (x0, lo.meter_y, total, lo.meter_h),
-                         border_radius=6)
-        if t > 0:
-            pygame.draw.rect(surface, color,
-                             (x0, lo.meter_y, max(6, int(total * t)), lo.meter_h),
-                             border_radius=6)
+        cx, cy = lo.radar_cx, lo.radar_cy
+        cw, ch = max(12, lo.radar_rx // 3), max(20, lo.radar_ry * 6 // 7)
+        top, bot = cy - ch // 2, cy + ch // 2
+        body = [(cx - cw * 0.32, top), (cx + cw * 0.32, top),
+                (cx + cw * 0.5, top + ch * 0.26), (cx + cw * 0.5, bot - ch * 0.13),
+                (cx + cw * 0.36, bot), (cx - cw * 0.36, bot),
+                (cx - cw * 0.5, bot - ch * 0.13), (cx - cw * 0.5, top + ch * 0.26)]
+        pygame.draw.polygon(surface, CAR_BODY, body)
+        pygame.draw.polygon(surface, CAR_EDGE, body, 2)
+        pygame.draw.line(surface, CAR_EDGE, (cx - cw * 0.30, top + ch * 0.28),
+                         (cx + cw * 0.30, top + ch * 0.28), 2)
+        for dx in (-cw * 0.26, cw * 0.26):
+            pygame.draw.circle(surface, CAR_LAMP, (int(cx + dx), int(top + 6)),
+                               max(2, lo.ring_w // 2))
 
     def _draw_db(self, surface, text, color):
+        """음압 숫자 — 레이더 오른쪽, 세로 중앙."""
         lo = self._lo
         num = self._f_db.render(text, True, color)
         unit = self._f_unit.render(" dB", True, MUTED)
         x = lo.db_right - num.get_width() - unit.get_width()
-        surface.blit(num, (x, lo.db_y))
+        y = lo.radar_cy - num.get_height() // 2
+        surface.blit(num, (x, y))
         surface.blit(unit, (x + num.get_width(),
-                            lo.db_y + num.get_height() - unit.get_height() - 3))
+                            y + num.get_height() - unit.get_height() - 4))
 
     def _draw_normal(self, surface, view, w, h):
-        """평상시도 같은 그리드 — 긴급 전환 시 화면이 재배치되지 않는다."""
+        """평상시도 같은 레이더를 쓴다 — 긴급 전환 시 화면이 재배치되지 않는다."""
         self._frame = (self._frame + 1) % 100000
         lo = self._lo
         surface.blit(self._f_veh.render("듣는 중", True, MUTED), lo.veh_xy)
-        self._draw_bar(surface, MUTED, 0, 0.0, lit=False)
-        self._draw_meter(surface, MUTED, 0.0)     # 빈 트랙 — 긴급과 같은 자리·같은 길이
+        self._draw_radar(surface, MUTED, 0.0, Direction.UNKNOWN)
         if view.subtitle:
             lines = hud_card.wrap_text(
                 view.subtitle, lambda s: self._f_cap.size(s)[0],

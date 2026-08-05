@@ -109,27 +109,6 @@ def test_render_future_state_no_crash():
     assert pygame.surfarray.array3d(surf).sum() > 0
 
 
-def test_led_cluster_follows_direction():
-    """방향에 따라 점등 클러스터의 가로 위치가 좌/우로 갈린다."""
-    import numpy as np
-    import pygame
-    from core.types import Direction
-    from hud.renderer import VEH_AMBULANCE
-
-    def lit_x_center(direction):
-        r, surf = _renderer_and_surface()
-        r._draw_emergency(surf, _view(direction), 1280, 720)
-        arr = pygame.surfarray.array3d(surf)          # shape (w, h, 3)
-        # 차종색(초록)에 가까운 픽셀들의 x 무게중심
-        target = np.array(VEH_AMBULANCE)
-        mask = (np.abs(arr.astype(int) - target).sum(axis=2) < 60)
-        xs = np.where(mask.any(axis=1))[0]
-        return xs.mean() if xs.size else None
-
-    left_cx = lit_x_center(Direction.LEFT)
-    right_cx = lit_x_center(Direction.RIGHT)
-    assert left_cx is not None and right_cx is not None
-    assert left_cx < right_cx                          # 좌측 클러스터가 더 왼쪽
 
 
 # ── Task 1: wrap_text (자막 자동 줄바꿈) ──────────────────────────────────
@@ -231,34 +210,6 @@ def test_normal_mode_long_subtitle_wraps_without_crash():
     assert pygame.surfarray.array3d(surf).sum() > 0
 
 
-def test_emergency_horn_strip_never_dark():
-    """경적: 스트립이 매 프레임 '점등'(차종색) 상태 — 접근 깜빡임으로 소등되지 않음.
-
-    깜빡임 OFF 세그먼트는 DIM(회색)으로 그려지므로, 단순 픽셀 유무가 아니라
-    '차종색(주황) 점등 세그먼트'가 매 프레임 존재하는지로 확인한다.
-    """
-    import numpy as np
-    import pygame
-    from hud.viewmodel import HudView
-    from hud.renderer import VEH_OTHER
-    from core.types import Direction, Motion
-    r, surf = _renderer_and_surface()
-    horn = HudView(
-        emergency=True, sound_text="경적", direction=Direction.LEFT,
-        direction_text="좌측", motion_text="접근 중", subtitle="",
-        confidence=0.8, motion=Motion.APPROACHING, is_horn=True,
-    )
-    target = np.array(VEH_OTHER)
-    top, bot = _bar_rows()
-    lit_counts = []
-    for _ in range(20):                             # 한 blink 주기(18) 이상
-        surf.fill((0, 0, 0))
-        r._draw_emergency(surf, horn, 1280, 720)
-        # 바 행만 검사 — 같은 색으로 그려지는 상태 문구를 제외한다
-        band = pygame.surfarray.array3d(surf).astype(int)[:, top:bot, :]
-        lit = (np.abs(band - target).sum(axis=2) < 80)   # 차종색 점등 세그먼트
-        lit_counts.append(int(lit.sum()))
-    assert all(c > 0 for c in lit_counts)           # 어떤 프레임에도 소등 안 됨
 
 
 # ── Task: 방향 바 각도 매핑 (azimuth_to_bar_index / direction_visible) ──────
@@ -329,31 +280,6 @@ def test_emergency_front_hides_bar():
     assert lit.sum() == 0                                              # 바 숨김
 
 
-def test_emergency_angle_positions_bar_left_vs_right():
-    """각도에 따라 점등 클러스터가 좌/우로 이동(실시간 각도 구동)."""
-    import numpy as np
-    import pygame
-    from hud.viewmodel import HudView
-    from hud.renderer import VEH_AMBULANCE
-    from core.types import Direction, Motion
-
-    def cluster_cx(raw):
-        r, surf = _renderer_and_surface()
-        surf.fill((0, 0, 0))
-        v = HudView(emergency=True, sound_text="구급차", direction=Direction.LEFT,
-                    direction_text="좌측", motion_text="접근 중", subtitle="",
-                    confidence=0.9, angle_deg=raw, motion=Motion.APPROACHING)
-        r._draw_emergency(surf, v, 1280, 720)
-        top, bot = _bar_rows()
-        arr = pygame.surfarray.array3d(surf)[:, top:bot, :]           # 바 행만
-        mask = (np.abs(arr.astype(int) - np.array(VEH_AMBULANCE)).sum(axis=2) < 60)
-        xs = np.where(mask.any(axis=1))[0]
-        return xs.mean() if xs.size else None
-
-    left_cx = cluster_cx(180)     # raw180 → 차량 좌 → 왼쪽
-    right_cx = cluster_cx(0)      # raw0   → 차량 우 → 오른쪽
-    assert left_cx is not None and right_cx is not None
-    assert left_cx < right_cx
 
 
 # ---------------------------------------------------------------------------
@@ -437,29 +363,6 @@ def test_layout_scales_to_other_sizes():
 SUITE_SIZES = [(1280, 360), (1280, 720), (640, 180), (1920, 540), (800, 480), (320, 180)]
 
 
-def test_vehicle_text_fits_the_gutter_at_every_size_the_suite_renders():
-    """차종 글자가 바 영역을 침범하면 안 된다 — 어느 해상도에서도.
-
-    f_veh 는 h 로, 텍스트 칸은 w 로 자란다. 세로가 긴 화면에서 둘이 어긋나
-    1280×720 의 "구급차"(x=612, 바 x0=608), 800×480 의 모든 문구가 바를 덮었다.
-    프로덕션 기본값은 360 이라 출고는 안전했지만 테스트 스위트가 그 깨진 영역을
-    렌더하고 있었다. 경계는 _bar_span() 의 x0 에서 L 라벨 자리(margin//3)만큼
-    왼쪽 — test_state_text_never_collides_with_the_bar_column 이 쓰는 것과 같은 식.
-    """
-    import pygame
-    from hud.config import HudConfig
-    from hud.renderer import Renderer, load_font
-    pygame.init()
-    # _draw_emergency 의 sound_text 후보 + _draw_normal 의 고정 문구
-    texts = ["구급차", "경찰차", "소방차", "긴급차량", "사이렌", "경적", "듣는 중"]
-    for w, h in SUITE_SIZES:
-        lo = Layout.for_size(w, h)
-        x0, _, _, _ = Renderer(HudConfig(width=w, height=h, fullscreen=False))._bar_span()
-        gutter = x0 - lo.margin // 3
-        f = load_font(lo.f_veh)
-        for t in texts:
-            end = lo.veh_xy[0] + f.size(t)[0]
-            assert end < gutter, f"{w}x{h} '{t}': 차종 글자가 x={end} 까지 뻗어 바(gutter {gutter})를 침범"
 
 
 def test_layout_bar_stays_inside_the_screen():
@@ -469,3 +372,56 @@ def test_layout_bar_stays_inside_the_screen():
         assert lo.bar_x + lo.bar_w <= w
         assert lo.db_right <= w
         assert lo.cap_cy < h
+
+
+# ---------------------------------------------------------------------------
+# 레이더 (v4) — 방향은 아크, 음압은 채워지는 링 수
+# ---------------------------------------------------------------------------
+from hud.card import RINGS, ARC_SPANS, ring_levels, arc_span
+
+
+def test_ring_levels_fill_from_inside_out():
+    """안쪽 링이 먼저 찬다 — 바깥이 켜졌는데 안쪽이 꺼져 있으면 안 된다."""
+    for t in (0.1, 0.3, 0.5, 0.7, 0.9, 1.0):
+        lv = ring_levels(t)
+        lit = [i for i, v in enumerate(lv) if v > 0]
+        assert lit == list(range(len(lit))), f"t={t}: 구멍이 뚫렸다 {lv}"
+
+
+def test_ring_levels_bounds():
+    assert ring_levels(0.0) == [0.0] * RINGS
+    assert ring_levels(1.0) == [1.0] * RINGS
+    assert all(0.0 <= v <= 1.0 for t in (0.13, 0.47, 0.82) for v in ring_levels(t))
+
+
+def test_quiet_sound_still_lights_one_ring():
+    """아주 작아도 '감지됐다'는 보여야 한다 — 0칸이면 미탐지와 구분이 안 된다."""
+    assert ring_levels(0.01)[0] > 0
+
+
+def test_partial_ring_separates_levels_that_would_collide_on_whole_counts():
+    """79dB 와 88dB 는 둘 다 3칸이지만 마지막 칸 밝기로 갈려야 한다.
+
+    9dB 차이는 소리 세기로 약 8배다. 화면이 같으면 안 된다.
+    """
+    a, b = ring_levels(0.44), ring_levels(0.60)          # 79dB, 88dB
+    assert sum(1 for v in a if v > 0) == sum(1 for v in b if v > 0)   # 칸 수는 같고
+    assert a != b, "칸 수가 같은 두 음압이 완전히 동일하게 표시된다"
+    assert a[2] < b[2], "마지막 칸 밝기가 음압을 반영하지 않는다"
+
+
+def test_ring_levels_are_monotonic_in_total():
+    tot = [sum(ring_levels(i / 20)) for i in range(21)]
+    assert all(x <= y + 1e-9 for x, y in zip(tot, tot[1:])), "음압이 올라가는데 총량이 줄었다"
+
+
+def test_every_direction_gets_its_own_arc():
+    spans = [arc_span(d) for d in (Direction.FRONT, Direction.REAR,
+                                   Direction.LEFT, Direction.RIGHT)]
+    assert all(s is not None for s in spans)
+    assert len(set(spans)) == 4, "두 방향이 같은 아크를 쓴다"
+
+
+def test_unknown_direction_has_no_arc():
+    """모르면 한 곳을 단정하지 않는다 — 렌더러가 네 방향을 균등하게 처리한다."""
+    assert arc_span(Direction.UNKNOWN) is None

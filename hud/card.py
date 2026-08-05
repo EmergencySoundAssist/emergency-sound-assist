@@ -218,6 +218,13 @@ class Layout:
     f_db: int
     f_unit: int
     f_cap: int
+    # 레이더(v4) — 중심·반지름·링 간격. 바/미터 좌표를 대체한다.
+    radar_cx: int
+    radar_cy: int
+    radar_rx: int
+    radar_ry: int
+    ring_gap: int
+    ring_w: int
 
     @classmethod
     def for_size(cls, w: int, h: int) -> "Layout":
@@ -248,4 +255,59 @@ class Layout:
             f_db=max(12, round(h * 0.08889)),
             f_unit=max(10, round(h * 0.05278)),
             f_cap=max(14, round(h * 0.10556)),
+            # 레이더는 자막 줄(cap_cy) 위에서 끝나야 한다. 아래 값들은
+            # radar_cy + radar_ry + ring_w/2 + (RINGS-1)*ring_gap < cap_cy 를 만족한다.
+            radar_cx=round(w * 0.54688),
+            radar_cy=round(h * 0.43889),
+            radar_rx=round(w * 0.11719),
+            radar_ry=round(h * 0.20000),
+            ring_gap=max(5, round(h * 0.03333)),
+            ring_w=max(3, round(h * 0.01667)),
         )
+
+
+# ── 레이더 (v4) — 방향은 아크 위치, 음압은 채워지는 링 수 ───────────────────
+# 가로 막대는 좌우 축만 표현할 수 있어 전/후를 담을 자리가 없었다(전방은 바를 숨기고
+# 후방은 중앙으로 밀어넣는 식). 네 방향 아크를 두면 각자 자리를 갖는다.
+RINGS = 5                       # 음압 척도. 안쪽에서 바깥으로 찬다.
+
+# 화면 기준 각도(pygame: 0=오른쪽, 반시계 증가). 위=전방.
+ARC_SPANS = {
+    Direction.FRONT: (55.0, 125.0),
+    Direction.RIGHT: (-35.0, 35.0),
+    Direction.REAR: (235.0, 305.0),
+    Direction.LEFT: (145.0, 215.0),
+}
+
+
+def ring_levels(t: float, rings: int = RINGS) -> List[float]:
+    """음압 강도 t(0~1) → 링별 밝기 0~1. 안쪽 링이 먼저 찬다.
+
+    칸 수만 쓰면 단계가 rings 개뿐이라 79dB 와 88dB 가 똑같이 3칸으로 뭉친다
+    (9dB 차이는 소리 세기로 약 8배다). 칸 수를 척도로 두고 **마지막 칸의 밝기**로
+    그 사이를 메운다 — 볼륨 바의 마지막 칸이 반쯤 차는 것과 같은 원리다.
+    부분 칸에 바닥 0.25 를 둬서 '켜지다 만' 상태가 눈에 보이게 한다.
+
+    꺼진 링(0.0)도 렌더러가 흐리게 그려야 '몇 칸 중 몇 칸'이라는 척도가 읽힌다.
+    """
+    if t <= 0:
+        return [0.0] * rings
+    x = max(t, 0.5 / rings) * rings         # 아주 작은 음압도 첫 칸은 보이게
+    out: List[float] = []
+    for r in range(rings):
+        if r + 1 <= x:
+            out.append(1.0)
+        elif r < x:
+            out.append(0.25 + 0.75 * (x - r))
+        else:
+            out.append(0.0)
+    return out
+
+
+def arc_span(direction: Direction):
+    """방향 → (시작각, 끝각). 방향 미상이면 None — 한 곳을 단정하지 않는다.
+
+    레이더는 Direction 4분면만 쓴다. 연속 각도(angle_deg)는 쓰지 않는다: 실제
+    방향 해상도가 4방향뿐인데 15칸 그리드로 보여주던 것이 과장이었다.
+    """
+    return ARC_SPANS.get(direction)
