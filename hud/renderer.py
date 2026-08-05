@@ -97,30 +97,63 @@ def load_font(size: int, path=None) -> "pygame.font.Font":
 
 class Renderer:
     def __init__(self, config):
-        h = config.height
-        self._f_mid = load_font(max(18, h // 12), config.font_path)   # 대기 문구
-        self._f_sub = load_font(max(20, h // 9), config.font_path)    # 점 애니메이션 크기
+        self._font_path = config.font_path
         self._frame = 0
+        self._size = None                       # 마지막으로 레이아웃을 잡은 박스 크기
+        # 설계 비율(기본 1280:360 ≈ 3.56:1). 윈드실드 띠를 전제로 잡은 값이라,
+        # 화면이 더 정사각형에 가까워도 이 비율을 유지해야 배치가 무너지지 않는다.
+        self._aspect = config.width / max(1, config.height)
+        self._build(config.width, config.height)
+
+    def _design_box(self, w: int, h: int) -> "pygame.Rect":
+        """설계 비율을 지킨 채 화면 안에 최대로 내접시키고 가운데 놓는다.
+
+        전체화면에서 실제 표면이 16:10 처럼 세로로 길면, 비율을 무시하고 좌표를 늘리면
+        상태 문구가 미터와 겹치고 간격만 벌어진다(젯슨 실기에서 확인). 띠를 그대로 두고
+        위아래를 배경으로 남기는 편이 읽기에 낫다.
+        """
+        if w / max(1, h) > self._aspect:        # 화면이 설계보다 넓다 → 높이에 맞춤
+            bw, bh = int(h * self._aspect), h
+        else:                                   # 화면이 설계보다 높다 → 폭에 맞춤
+            bw, bh = w, int(w / self._aspect)
+        return pygame.Rect((w - bw) // 2, (h - bh) // 2, bw, bh)
+
+    def _build(self, w: int, h: int) -> None:
+        """(w, h) 에 맞춰 좌표와 폰트를 다시 잡는다.
+
+        설정값이 아니라 **실제로 그릴 표면 크기**를 기준으로 해야 한다. 전체화면에서
+        SDL 이 요청한 1280×360 모드를 못 주면 더 큰 표면을 돌려주는데, 그때 설정값으로
+        좌표를 잡으면 배경만 화면을 덮고 내용은 위쪽 360px 에 몰린다(젯슨 실기에서 확인).
+        """
+        self._size = (w, h)
+        self._lo = Layout.for_size(w, h)
+        lo = self._lo
+        self._f_mid = load_font(max(18, h // 12), self._font_path)   # 대기 문구
+        self._f_sub = load_font(max(20, h // 9), self._font_path)    # 점 애니메이션 크기
         # 고정 그리드 폰트 — 크기도 Layout 에서 나온다. 좌표만 모으고 폰트를 여기
         # 남기면 둘이 따로 놀아 그리드가 어긋난다(차종 104px 자리에 40px 글자).
-        self._lo = Layout.for_size(config.width, config.height)
-        lo = self._lo
-        self._f_veh = load_font(lo.f_veh, config.font_path)      # 차종 — 압도적으로 크게
-        self._f_state = load_font(lo.f_state, config.font_path)  # 접근/멀어짐
-        self._f_db = load_font(lo.f_db, config.font_path)        # 음압 숫자(보조)
-        self._f_unit = load_font(lo.f_unit, config.font_path)    # dB 단위 · L/R 라벨
-        self._f_cap = load_font(lo.f_cap, config.font_path)      # 자막
+        self._f_veh = load_font(lo.f_veh, self._font_path)      # 차종 — 압도적으로 크게
+        self._f_state = load_font(lo.f_state, self._font_path)  # 접근/멀어짐
+        self._f_db = load_font(lo.f_db, self._font_path)        # 음압 숫자(보조)
+        self._f_unit = load_font(lo.f_unit, self._font_path)    # dB 단위 · L/R 라벨
+        self._f_cap = load_font(lo.f_cap, self._font_path)      # 자막
 
     def draw(self, surface, view) -> None:
-        w, h = surface.get_size()
-        surface.fill(BG)
+        surface.fill(BG)                # 레터박스 여백도 같은 배경으로 덮는다
+        box = self._design_box(*surface.get_size())
+        if box.size != self._size:      # 크기가 바뀐 프레임에만 재계산(폰트 로드가 비싸다)
+            self._build(*box.size)
+        # 박스 안에서만 그린다. subsurface 는 픽셀을 공유하고 좌표가 박스 기준이라
+        # 아래 그리기 코드는 화면이 얼마나 크든 1280×360 을 그린다고 믿으면 된다.
+        target = surface.subsurface(box) if box.size != surface.get_size() else surface
+        w, h = box.size
         if view is None:
-            self._center(surface, "연결됨 · 대기 중", self._f_mid, MUTED, w // 2, h // 2)
+            self._center(target, "연결됨 · 대기 중", self._f_mid, MUTED, w // 2, h // 2)
             return
         if view.emergency:
-            self._draw_emergency(surface, view, w, h)
+            self._draw_emergency(target, view, w, h)
         else:
-            self._draw_normal(surface, view, w, h)
+            self._draw_normal(target, view, w, h)
 
     def _draw_emergency(self, surface, view, w, h):
         """고정 그리드: 왼쪽 텍스트 / 오른쪽 바+미터. 좌표는 Layout 에서만 온다."""

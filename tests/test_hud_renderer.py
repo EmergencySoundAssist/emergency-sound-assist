@@ -146,3 +146,45 @@ def test_front_lights_no_segment_but_still_marks_itself():
                 for y in range(lo.bar_cy - lo.seg_h // 2 - 34, lo.bar_cy - lo.seg_h // 2)
                 if sum(front.get_at((x, y))[:3]) > 150)
     assert above > 0, "전방 표식이 없다"
+
+
+# ---------------------------------------------------------------------------
+# 레터박스 — 표면이 설계 비율(1280:360)보다 세로로 길면 띠를 가운데 둔다.
+# 젯슨 실기에서 발견: 전체화면 표면이 요청보다 커도 좌표는 설정값으로 잡혀서
+# 배경만 화면을 덮고 내용은 위쪽 360px 에 몰렸다.
+# ---------------------------------------------------------------------------
+
+def _render_at(w, h, view, frames=3):
+    pygame.init()
+    surf = pygame.Surface((w, h))
+    r = Renderer(HudConfig(fullscreen=False))
+    for _ in range(frames):
+        r.draw(surf, view)
+    return surf
+
+
+def _content_rows(surf, thresh=150):
+    w, h = surf.get_size()
+    return [y for y in range(h)
+            if any(sum(surf.get_at((x, y))[:3]) > thresh for x in range(0, w, 4))]
+
+
+def test_taller_screen_centers_the_band_instead_of_stretching_it():
+    """1280x800 에서 내용이 위로 몰리지도, 세로로 늘어나지도 않아야 한다."""
+    rows = _content_rows(_render_at(1280, 800, _view()))
+    assert rows, "아무것도 그려지지 않았다"
+    band_top, band_bot = min(rows), max(rows)
+    # 설계 띠(360)가 800 안에 들어가면 위아래 여백이 각각 220
+    assert band_top >= 200, f"내용이 위로 몰렸다 (top={band_top})"
+    assert band_bot <= 600, f"내용이 아래로 넘쳤다 (bottom={band_bot})"
+    # 위아래 여백이 서로 비슷해야 '가운데'다
+    assert abs(band_top - (800 - band_bot)) <= 60, \
+        f"위아래 여백이 다르다 (위 {band_top}, 아래 {800 - band_bot})"
+
+
+def test_reference_resolution_is_unchanged_by_the_letterbox_path():
+    """1280x360 은 박스가 화면 전체라 기존 좌표 그대로여야 한다."""
+    lo = Layout.for_size(1280, 360)
+    surf = _render_at(1280, 360, _view())
+    rows = _content_rows(surf)
+    assert rows and min(rows) < lo.bar_cy < max(rows)
