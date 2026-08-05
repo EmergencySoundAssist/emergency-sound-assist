@@ -1,8 +1,7 @@
-"""HudView v2 — angle_deg·speed_level Optional 필드의 전방호환 매핑 테스트.
+"""HudView v2 — angle_deg Optional 필드의 전방호환 매핑 테스트.
 
-feat/hud 현재 상태에서 ApproachResult 에는 speed_level 이 없다. from_fused 가
-getattr 로 안전하게 None 을 채우고, feat/lean-integration 병합 후엔 실제 값을
-자동으로 흡수함을 검증한다.
+feat/hud 현재 상태에서 DirectionResult.angle_deg 가 없을 수 있다. from_fused 가
+안전하게 None 을 채우고, 값이 있으면 그대로 흡수함을 검증한다.
 """
 
 from core.types import (
@@ -23,10 +22,9 @@ def _fused(angle=None, motion=Motion.APPROACHING, subtype=SirenSubtype.AMBULANCE
 
 
 def test_hudview_has_optional_fields_default_none():
-    """angle_deg·speed_level 은 소스에 없으면 None (현재 feat/hud 상태)."""
+    """angle_deg 는 소스에 없으면 None (현재 feat/hud 상태)."""
     v = HudView.from_fused(_fused())
     assert v.angle_deg is None          # DirectionResult.angle_deg 가 None
-    assert v.speed_level is None        # ApproachResult 에 speed_level 필드 없음 → getattr None
 
 
 def test_hudview_reads_angle_when_present():

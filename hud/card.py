@@ -1,10 +1,11 @@
 """HUD LED 카드의 순수 계산 로직 (pygame 의존 없음 → 단위테스트 용이).
 
-방향각/이산방향 → 세그먼트 위치, 접근 빠르기 → blink 주기, 세그먼트 밝기 감쇠.
-데이터가 없을 때(angle None / speed None)의 성능저하 규칙도 여기서 결정한다.
+방향각/이산방향 → 세그먼트 위치, 음압 강도 → 미터·글로우·퍼지는 깜빡임(ripple)
+주기, 세그먼트 밝기 감쇠. 데이터가 없을 때(angle None)의 폴백 규칙도 여기서 결정한다.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
 from core.types import Direction, Motion
@@ -25,33 +26,6 @@ def direction_to_index(angle_deg: Optional[float], direction: Direction, n: int 
     if direction is Direction.RIGHT:
         return n - 1 - n // 4
     return mid                                         # FRONT/REAR/UNKNOWN → 중앙
-
-
-# speed_level 1~5 → blink 주기 프레임(느림 30 ~ 빠름 9), 라벨
-_SPEED_LABEL = {5: "빠르게", 4: "빠르게", 3: "보통", 2: "느리게", 1: "느리게"}
-_SPEED_PERIOD = {5: 9, 4: 12, 3: 18, 2: 24, 1: 30}
-
-
-def blink_spec(speed_level: Optional[int], motion: Motion) -> Tuple[str, int]:
-    """(라벨, blink 주기프레임). 주기 0 = 상시점등(깜빡임 없음).
-
-    speed_level 있으면 1~5로 정밀 매핑. 없으면 Motion 폴백:
-    접근=보통(18) blink, 멀어짐/유지/미상=상시(0).
-    """
-    if speed_level is not None:
-        lv = max(1, min(5, speed_level))
-        return (_SPEED_LABEL[lv], _SPEED_PERIOD[lv])
-    if motion is Motion.APPROACHING:
-        return ("접근 중", 18)
-    labels = {Motion.RECEDING: "멀어짐", Motion.STEADY: "유지", Motion.UNKNOWN: "이동 미상"}
-    return (labels.get(motion, "이동 미상"), 0)
-
-
-def is_lit_now(period_frames: int, frame_count: int) -> bool:
-    """blink 현재 on/off. 주기 0이면 항상 on. 앞 절반 on, 뒤 절반 off."""
-    if period_frames <= 0:
-        return True
-    return (frame_count % period_frames) < (period_frames / 2.0)
 
 
 def segment_brightness(seg_index: int, center_index: int, radius: int = 2) -> float:
@@ -130,23 +104,6 @@ def dots_brightness(frame: int, count: int = 3, period: int = 24) -> List[float]
     return out
 
 
-def strip_lit(
-    is_horn: bool,
-    speed_level: Optional[int],
-    motion: Motion,
-    frame: int,
-) -> bool:
-    """이번 프레임에 방향 LED 스트립을 켤지 여부.
-
-    경적은 '접근 여부'를 출력하지 않으므로 깜빡이지 않고 상시 점등한다.
-    그 외에는 기존 blink 규칙(blink_spec 주기 + is_lit_now)을 따른다.
-    """
-    if is_horn:
-        return True
-    _, period = blink_spec(speed_level, motion)
-    return is_lit_now(period, frame)
-
-
 def azimuth_to_bar_index(raw_deg: float, n: int = 15) -> Optional[int]:
     """raw DoA 방위각 → 가로 바 인덱스(0=좌 ~ n-1=우). 전방이면 None(숨김).
 
@@ -169,36 +126,9 @@ def direction_visible(direction: Direction) -> bool:
     return direction is not Direction.FRONT
 
 
-# ── 접근 빠르기(speed_level) → 퍼짐 반경 · 퍼지는 깜빡임(ripple) ─────────────
-RIPPLE_PERIOD = 16          # 퍼짐 깜빡임 한 주기 프레임 수(@30fps). 디자인 확정값.
-
-# 근접도 게이지(0~1) → 점등 클러스터 반경. 가까울수록 넓게 = "거리에 따라 범위가 넓어짐".
-# 게이지 없음(접근 아님/미상/경적)이면 기본 반경 3.
-def spread_for_gauge(gauge: Optional[float]) -> int:
-    """근접 게이지(0.0~1.0) → 퍼짐 반경 2~6. None 이면 기본 3."""
-    if gauge is None:
-        return 3
-    return int(round(2 + max(0.0, min(1.0, gauge)) * 4))    # 0→2(멀리) … 1→6(최근접)
-
-
+# ── 퍼지는 깜빡임(ripple) 상수 · should_ripple ──────────────────────────────
 RIPPLE_PERIOD_FAR = 28      # 멀 때 한 주기 프레임(@30fps) ≈ 0.93초 → 0.9 Hz
 RIPPLE_PERIOD_NEAR = 11     # 최근접 ≈ 0.37초 → 2.7 Hz
-
-
-def ripple_period_for_gauge(gauge: Optional[float]) -> int:
-    """근접 게이지(0.0~1.0) → 퍼짐 한 주기 프레임 수. 가까울수록 짧다(=빨리 퍼진다).
-
-    폭(spread_for_gauge)과 속도를 같은 게이지에 묶어, 가까워질수록 넓고 빠르게
-    퍼지게 한다. 운전자는 숫자를 읽지 않고 '리듬'으로 거리를 느낀다.
-
-    하한 11프레임(≈2.7 Hz)은 광과민성 안전선이다. 초당 3회를 넘는 점멸은 발작을
-    유발할 수 있어(WCAG 2.3.1 기준) 아무리 가까워도 그 아래로 내려가지 않는다.
-    게이지가 없으면(접근 아님·미상·경적) 중간값을 쓴다.
-    """
-    if gauge is None:
-        return (RIPPLE_PERIOD_FAR + RIPPLE_PERIOD_NEAR) // 2
-    g = max(0.0, min(1.0, gauge))
-    return int(round(RIPPLE_PERIOD_FAR - g * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))
 
 
 def should_ripple(is_horn: bool, motion: Motion) -> bool:
@@ -208,7 +138,7 @@ def should_ripple(is_horn: bool, motion: Motion) -> bool:
 
 def ripple_brightness(
     seg_index: int, center_index: int, radius: float,
-    frame: int, period: int = RIPPLE_PERIOD,
+    frame: int, period: int = RIPPLE_PERIOD_FAR,
 ) -> float:
     """퍼지는 깜빡임의 세그먼트 밝기(0~1).
 
@@ -217,3 +147,105 @@ def ripple_brightness(
     ph = (frame % period) / period                 # 0~1 위상
     er = 1.0 + (radius - 1.0) * ph                  # 확장 반경
     return segment_brightness(seg_index, center_index, er) * (1.0 - 0.55 * ph)
+
+
+# ── 음압(dB) → 시각량 ────────────────────────────────────────────────────
+# 보정 여부에 따라 눈금이 다르다. dBFS 는 항상 음수(0=풀스케일)라, dB SPL 범위를
+# 그대로 쓰면 미터가 늘 0 에 붙어 아무 정보도 주지 못한다.
+SPL_RANGE = (55.0, 110.0)      # 보정됨(dB SPL): 조용한 실내 ~ 코앞 사이렌
+DBFS_RANGE = (-55.0, 0.0)      # 미보정(dBFS)  : 풀스케일 기준
+
+# ponytail: 두 범위 모두 어림값이다. 실차 녹음으로 사이렌의 실제 도달 분포를 본 뒤
+# 조정한다 — 도심에서 미터가 늘 절반 이상 차 있으면 눈금을 다시 잡아야 한다.
+
+
+def spl_intensity(level_db: Optional[float], calibrated: bool) -> float:
+    """음압 → 0~1 강도. 값이 없으면 0.0.
+
+    미터 채움·글로우·퍼짐 주기가 전부 이 하나에서 나온다. 화면의 모든 움직임이
+    같은 물리량을 가리키게 하려는 것이다(v2 는 폭·속도·색이 서로 다른 값에 묶여
+    있었다).
+    """
+    if level_db is None:
+        return 0.0
+    lo, hi = SPL_RANGE if calibrated else DBFS_RANGE
+    return max(0.0, min(1.0, (level_db - lo) / (hi - lo)))
+
+
+def spl_to_glow(t: float) -> float:
+    """강도 → 글로우 배수.
+
+    상한을 낮게 잡는다. 세게 주면 켜진 칸들이 한 덩어리로 뭉쳐서, 정작 방향
+    해상도가 음압에 반비례해 떨어지는 역설이 생긴다(v1 목업에서 확인).
+    """
+    return 0.5 + 1.1 * max(0.0, min(1.0, t))
+
+
+def ripple_period_for_spl(t: float) -> int:
+    """강도 → 퍼짐 한 주기 프레임 수. 소리가 클수록 짧다(=빨리 퍼진다).
+
+    ⚠ 하한 RIPPLE_PERIOD_NEAR(11프레임 ≈2.7Hz)는 광과민성 안전선이다. 초당 3회를
+    넘는 점멸은 발작을 유발할 수 있어(WCAG 2.3.1) 음압이 아무리 커도 내려가지
+    않는다. 기존 ripple_period_for_gauge 의 제약을 그대로 승계한다.
+    """
+    t = max(0.0, min(1.0, t))
+    return int(round(RIPPLE_PERIOD_FAR - t * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))
+
+
+# ── 고정 레이아웃 ────────────────────────────────────────────────────────
+# 좌표는 여기에서만 나온다. 상태가 바뀌어도 요소가 이동·신축하지 않아야 운전 중
+# 흘긋 볼 때 눈이 매번 같은 자리를 본다. 비율은 1280×360(윈드실드 띠)에서 뽑았다.
+@dataclass(frozen=True)
+class Layout:
+    """HUD 고정 그리드 좌표. (w, h) 에서 한 번 계산하고 이후 불변."""
+    margin: int
+    veh_xy: Tuple[int, int]
+    state_xy: Tuple[int, int]
+    bar_x: int
+    bar_w: int
+    bar_cy: int
+    seg_h: int
+    seg_n: int
+    meter_y: int
+    meter_h: int
+    db_right: int
+    db_y: int
+    cap_cy: int
+    # 폰트 크기도 여기서 나온다. 좌표만 모으고 폰트를 렌더러에 남기면 둘이 따로
+    # 놀아 그리드가 어긋난다(차종 104px 자리에 40px 글자가 앉는 식).
+    f_veh: int
+    f_state: int
+    f_db: int
+    f_unit: int
+    f_cap: int
+
+    @classmethod
+    def for_size(cls, w: int, h: int) -> "Layout":
+        margin = round(w * 0.05625)
+        bar_x = round(w * 0.46875)
+        # f_veh 는 h 로, 텍스트 칸 폭은 w 로 자란다 — 세로가 긴 화면에서 차종 글자가
+        # 바 영역을 침범한다(1280×720 의 "구급차", 800×480 의 모든 문구). 텍스트 칸
+        # (bar_x - margin)에 맞춰 상한을 건다. 나누는 수 4.0 은 최장 문구 "긴급차량"
+        # 의 폭÷폰트크기(≈3.48)에 L 라벨 gutter(margin//3) 여유를 더한 값이다.
+        # 1280×360 에선 528/4.0=132 > 104 라 기준 해상도 값은 그대로 104.
+        f_veh = max(24, min(round(h * 0.28889), round((bar_x - margin) / 4.0)))
+        return cls(
+            margin=margin,
+            veh_xy=(margin, round(h * 0.21667)),
+            state_xy=(margin + round(w * 0.003), round(h * 0.55556)),
+            bar_x=bar_x,
+            bar_w=w - bar_x - margin,
+            bar_cy=round(h * 0.41667),
+            seg_h=round(h * 0.09444),
+            seg_n=15,
+            meter_y=round(h * 0.64444),
+            meter_h=max(4, round(h * 0.03333)),
+            db_right=w - margin,
+            db_y=round(h * 0.74444),
+            cap_cy=round(h * 0.89444),
+            f_veh=f_veh,
+            f_state=max(14, round(h * 0.12222)),
+            f_db=max(12, round(h * 0.08889)),
+            f_unit=max(10, round(h * 0.05278)),
+            f_cap=max(14, round(h * 0.10556)),
+        )

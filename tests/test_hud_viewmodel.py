@@ -74,77 +74,53 @@ def test_speech_empty_text_blank_subtitle():
     assert v.subtitle == ""
 
 
-# ---------------------------------------------------------------------------
-# 거리 문구 — 접근 중에도 비어 있지 않아야 한다
-# ---------------------------------------------------------------------------
-def _approaching(gauge, proximity=None):
+def _fused_with_level(level_db):
+    from core.types import (
+        ClassResult, SoundClass, DirectionResult, Direction,
+        ApproachResult, Motion, FusedResult,
+    )
+    ap = ApproachResult(motion=Motion.APPROACHING)
+    setattr(ap, "level_db", level_db)
     return FusedResult(
-        sound=ClassResult.from_label(SoundClass.SIREN, 0.9,
-                                     subtype=SirenSubtype.AMBULANCE),
-        direction=DirectionResult(direction=Direction.REAR, angle_deg=180.0),
-        approach=ApproachResult(motion=Motion.APPROACHING, gauge=gauge,
-                                proximity=proximity),
-        speech=None,
-    )
-
-
-def test_distance_shows_while_still_approaching():
-    """detector 가 최근접 전이라 proximity=None 이어도 게이지로 거리를 말한다."""
-    assert HudView.from_fused(_approaching(0.10)).proximity == "원거리"
-    assert HudView.from_fused(_approaching(0.50)).proximity == "근거리"
-    assert HudView.from_fused(_approaching(0.90)).proximity == "근접"
-
-
-def test_closest_label_is_reserved_for_a_confirmed_peak():
-    """접근 중에는 아무리 가까워도 '최근접'이라 하지 않는다 — 더 가까워질 수 있다."""
-    assert HudView.from_fused(_approaching(1.0)).proximity == "근접"
-    # 최고점이 확정되면 detector 가 준 라벨을 그대로 쓴다
-    assert HudView.from_fused(_approaching(1.0, proximity="최근접")).proximity == "최근접"
-
-
-def test_detector_label_wins_over_the_gauge_fallback():
-    assert HudView.from_fused(_approaching(0.1, proximity="근거리")).proximity == "근거리"
-
-
-def test_no_distance_when_not_approaching():
-    """멀어짐·유지·미상에서는 게이지로 거리를 지어내지 않는다."""
-    v = FusedResult(
         sound=ClassResult.from_label(SoundClass.SIREN, 0.9),
-        direction=DirectionResult(direction=Direction.REAR),
-        approach=ApproachResult(motion=Motion.RECEDING, gauge=0.9),
-        speech=None,
+        direction=DirectionResult(direction=Direction.RIGHT),
+        approach=ap,
     )
-    assert HudView.from_fused(v).proximity is None
 
 
-def test_relative_distance_only_after_the_closest_point():
-    """거리비는 최고점이 확정된 뒤에만 값이 있다 — 접근 중에는 None."""
-    assert HudView.from_fused(_approaching(0.9)).rel_distance is None
-    v = FusedResult(
-        sound=ClassResult.from_label(SoundClass.SIREN, 0.9),
-        direction=DirectionResult(direction=Direction.REAR),
-        approach=ApproachResult(motion=Motion.RECEDING, gauge=0.4,
-                                proximity="원거리", rel_distance=3.32),
-        speech=None,
-    )
-    assert HudView.from_fused(v).rel_distance == 3.32
+def test_no_number_when_uncalibrated():
+    """미보정 dBFS 는 운전자에게 의미 없는 숫자다. 단위를 속이느니 안 낸다."""
+    import hud.viewmodel as vm
+    view = vm.HudView.from_fused(_fused_with_level(-4.0))
+    assert view.spl_calibrated is False
+    assert view.level_text is None
+    assert view.level_db == -4.0          # 값 자체는 남는다 — 미터가 쓴다
 
 
-def test_level_text_declares_dbfs_when_uncalibrated():
-    """마이크 감도 보정 전에는 단위를 dBFS 로 밝힌다 — dB 로 적으면 물리 음압으로 읽힌다."""
-    from hud.viewmodel import _level_text
-    from approach.detector import SPL_CALIBRATED
-    txt = _level_text(-12.4)
-    assert txt is not None
-    assert ("dBFS" in txt) is (not SPL_CALIBRATED)
+def test_number_appears_once_calibrated(monkeypatch):
+    import hud.viewmodel as vm
+    monkeypatch.setattr(vm, "SPL_CALIBRATED", True)
+    view = vm.HudView.from_fused(_fused_with_level(92.0))
+    assert view.spl_calibrated is True
+    assert view.level_text == "92"
+
+
+def test_distance_fields_are_gone():
+    """v3 에서 '거리'는 가짜 물리량이라 제거됐다. 되살아나면 실패한다."""
+    import hud.viewmodel as vm
+    view = vm.HudView.from_fused(_fused_with_level(-4.0))
+    for dead in ("gauge", "proximity", "rel_distance", "speed_level"):
+        assert not hasattr(view, dead), f"{dead} 가 되살아났다"
 
 
 def test_level_text_absent_without_a_reading():
     from hud.viewmodel import _level_text
-    assert _level_text(None) is None
+    assert _level_text(None, True) is None
 
 
-def test_level_survives_into_the_view():
+def test_level_survives_into_the_view(monkeypatch):
+    import hud.viewmodel as vm
+    monkeypatch.setattr(vm, "SPL_CALIBRATED", True)
     v = FusedResult(
         sound=ClassResult.from_label(SoundClass.SIREN, 0.9),
         direction=DirectionResult(direction=Direction.REAR),
