@@ -93,6 +93,7 @@ class FasterWhisperEngine:
         self._no_speech_threshold = cfg.no_speech_threshold
         self._log_prob_threshold = cfg.log_prob_threshold
         self._compression_ratio_threshold = cfg.compression_ratio_threshold
+        self._whisper_vad_filter = cfg.whisper_vad_filter
 
         self._build_with_fallback()
 
@@ -142,6 +143,8 @@ class FasterWhisperEngine:
                     no_speech_threshold=self._no_speech_threshold,
                     log_prob_threshold=self._log_prob_threshold,
                     compression_ratio_threshold=self._compression_ratio_threshold,
+                    # 외부 발화 VAD가 통과시킨 도로소음을 내부 Silero VAD로 재검사.
+                    vad_filter=self._whisper_vad_filter,
                 )
                 segs = list(segments)
             except Exception as e:                # noqa: BLE001
@@ -198,7 +201,7 @@ class Transcriber:
         self.cfg = config or STTConfig()
         self._engine = engine          # 주입 가능(테스트). None 이면 첫 인식 때 lazy-load.
         self._on_status = on_status    # 상태 콜백("transcribing" 등) — UI 표시용
-        self._vad = make_vad(self.cfg)     # webrtcvad(있으면) / energy 폴백
+        self._vad = make_vad(self.cfg)     # 기본 Silero, 실패 시 WebRTC → energy 폴백
         self._buf: List[np.ndarray] = []   # 음성이 이어지는 동안 누적
         self._silence_run = 0              # 음성 이후 연속 무음 청크 수
         self._had_speech = False           # 현재 버퍼에 음성이 들어있는지
@@ -264,6 +267,8 @@ class Transcriber:
         self._emit("transcribing")                # UI: '변환 중' 표시 (엔진 호출은 블로킹)
         text, conf, lang = self._get_engine().transcribe(audio, sr)
         text = (text or "").strip()
+        if conf < self.cfg.min_confidence:
+            text = ""
         return SpeechResult(is_speech=True, text=text, confidence=conf, lang=lang)
 
     def _get_engine(self) -> _Engine:
@@ -287,4 +292,6 @@ def transcribe_array(
     audio = _to_mono(samples)
     text, conf, lang = eng.transcribe(audio, sample_rate)
     text = (text or "").strip()
+    if conf < cfg.min_confidence:
+        text = ""
     return SpeechResult(is_speech=bool(audio.size), text=text, confidence=conf, lang=lang)

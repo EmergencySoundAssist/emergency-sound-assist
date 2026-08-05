@@ -98,7 +98,7 @@ def _to_vehicle_angle(raw_deg):
 
 ```bash
 cd emergency-sound-assist
-python3 doa/respeaker_tuning.py DOAANGLE   # 소리 내면서 여러 번 실행
+python doa/respeaker_tuning.py DOAANGLE   # 소리 내면서 여러 번 실행
 ```
 
 1. **후방(케이블 쪽)에서** 소리 → 나온 raw 값을 `REAR_RAW_DEG`에 기입.
@@ -122,7 +122,8 @@ estimate_direction(chunk, angle_deg=None)
 ```
 
 - `angle_deg`(및 `DirectionResult.angle_deg`)는 **보정 전 raw 값**을 그대로 보존한다(디버깅·2단계용). 변환은 `angle_to_direction` 내부에서만 일어난다.
-- `chunk`(4채널 오디오)는 1단계에선 미사용이며 2단계 GCC-PHAT에서 활용 예정.
+- 이 장치 자체 DoA 경로에서는 `chunk`를 사용하지 않는다. 통합 경로는 `doa.multi_source`가
+  `ch1~4` 오디오를 받아 SRP-PHAT 또는 MUSIC으로 방향을 계산한다.
 
 ---
 

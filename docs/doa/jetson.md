@@ -1,82 +1,84 @@
-# Jetson 배포 런북 (DoA)
+# Jetson 방향 추정 배포
 
-대상: **Jetson Orin Nano (JetPack / aarch64)** + ReSpeaker USB 4-Mic Array.
+대상은 Jetson Orin Nano와 ReSpeaker USB 6채널 입력이다. 통합 파이프라인은 ch1~4 raw
+마이크를 SRP-PHAT에 사용한다.
 
-세 단계로 위험을 줄인다 — **하드웨어 없이 먼저(데모) → 실물 오디오(udev 불필요) → (옵션) 경량 XVF(udev 필요).**
+## 설치
 
-| 경로 | 명령 (레포 루트에서) | 하드웨어 | udev | 추가 의존성 |
-|------|------|----------|------|------------|
-| **데모(검증)** | `python -m doa.multi_live --demo` | ❌ 불필요 | ❌ | pyroomacoustics |
-| **오디오 SRP/MUSIC (주)** | `python -m doa.multi_live --no-led` | ReSpeaker | ❌ | pyroomacoustics + libportaudio2 |
-| **경량 XVF (옵션)** | `python -m doa.live` | ReSpeaker | ✅ **필요** | pyusb |
-
-> ⚠️ **conda 금지.** JetPack/aarch64 에선 Anaconda 가 맞지 않는다. 반드시 `python3 -m venv` 사용.
-> 방향만 필요하고 LED를 안 쓰면 **오디오 경로(udev 불필요)** 로 충분하다 — 다른 분류/접근 브랜치가
-> Jetson에서 잘 돌던 것과 같은 접근이다. udev가 필요한 건 XVF 레지스터·LED 같은 USB 제어뿐.
-
----
-
-## 0. 코드 가져오기 (detached HEAD 주의)
 ```bash
-cd ~/emergency-sound-assist
-git fetch origin && git switch doa-jamin   # origin/doa-jamin 직접 체크아웃은 detached HEAD → pull 안 됨
-git rev-parse --short HEAD                  # 기대 커밋인지 확인 (옛 코드 실행 사고 방지)
+sudo apt update
+sudo apt install -y libportaudio2 libusb-1.0-0 build-essential python3-dev
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -r requirements.txt
 ```
 
-## 1. 가상환경 + 설치
-```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-sudo apt install -y libportaudio2          # sounddevice(오디오) 런타임
-# pyroomacoustics 가 소스 빌드로 떨어질 수 있어 빌드 도구 미리:
-sudo apt install -y build-essential python3-dev
-pip install -r requirements.txt            # numpy, scipy, sounddevice, pyroomacoustics, pyusb
-```
-> pyroomacoustics aarch64 휠이 없어 빌드가 오래/실패하면, scipy 가 먼저 import 되는지 확인하고
-> piwheels/JetPack 제공 휠을 우선 사용한다.
+`pyroomacoustics`가 aarch64에서 소스 빌드되면 설치 시간이 길 수 있다. 방향 오디오 경로는
+`numpy`, `scipy`, `sounddevice`, `pyroomacoustics`가 필요하고, 자체 DoA와 LED는 `pyusb`와
+`libusb`가 추가로 필요하다.
 
-## 2. 하드웨어 없이 먼저 검증 (장치·udev 불필요)
+## 하드웨어 없는 확인
+
 ```bash
 python -m doa.multi_live --demo
+python -m doa.multi_live --demo --algo MUSIC
 ```
-합성 음원을 한 바퀴 돌리며 입력각 vs 추정각을 출력하고, 끝에 `N/48 프레임 오차 ≤10°` 를 보여준다.
-**이게 통과하면 "설치(pyroomacoustics aarch64 포함)·SRP 연산이 이 Jetson에서 동작"** 이 확인된 것 —
-남은 변수는 실물 마이크 연결뿐이다.
 
-## 3. 실물 오디오 경로 — 주 경로 (udev 불필요)
-```bash
-python -c "import sounddevice as sd; print(sd.query_devices())"   # 6채널 'ReSpeaker' 인덱스 확인
-python -m doa.multi_live --no-led                                 # 자동 탐지
-python -m doa.multi_live --no-led --device 2                      # 이름 매칭 실패 시 인덱스 지정
-```
-오디오 캡처는 ALSA(snd-usb-audio)로 처리돼 **별도 USB 권한이 필요 없다.** 방향이 안 뜨고
-`ReSpeaker(6채널)를 못 찾음` 이면 `query_devices()` 의 6채널 장치 인덱스를 `--device` 로 직접 지정.
+이 단계가 통과하면 오디오 장치와 무관하게 pyroomacoustics 연산과 방향 매핑이 동작한다.
 
-## 4. (옵션) 경량 XVF 경로 — udev 필요
-LED나 ReSpeaker 자체 DoA(`doa.live`, pyroomacoustics 불필요)를 쓰려면 **USB 제어 권한**이 필요하다.
+## ReSpeaker 오디오 방향
 
 ```bash
-sudo apt install -y libusb-1.0-0
-echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0018", MODE="0666"' \
-  | sudo tee /etc/udev/rules.d/99-respeaker.rules
-sudo udevadm control --reload-rules && sudo udevadm trigger
-# ReSpeaker 재플러그 후:
-lsusb | grep 2886        # 2886:0018 보이면 인식 OK
+python -c "import sounddevice as sd; print(sd.query_devices())"
+python -m doa.multi_live --no-led
+python -m doa.multi_live --no-led --device 2
+```
+
+이 경로는 ALSA 오디오로 ch1~4를 읽으므로 일반적으로 별도 USB 제어 권한이 필요 없다.
+
+## 자체 DoA와 LED 권한
+
+`doa.live`와 `--led`는 USB 제어를 사용한다. 권한 오류가 있으면 ReSpeaker의 실제 vendor/product
+ID를 `lsusb`로 확인한 뒤 udev 규칙을 만든다. 장치 ID를 확인하지 않고 문서의 예시 값을 그대로
+복사하지 않는다.
+
+```bash
+lsusb
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+규칙 적용 후 ReSpeaker를 다시 연결하고 확인한다.
+
+```bash
 python -m doa.live
+python -m doa.multi_live --led
 ```
 
-### 트러블슈팅 — `장치 없음` / `angle=None`
-1. **권한 vs stale 코드 구분**: `sudo $(which python) -m doa.live` 로 떠보기.
-   - sudo 면 되고 일반은 안 되면 → **udev 권한 문제** (위 규칙·재플러그 재확인).
-   - sudo 로도 안 되면 → 연결/`lsusb`/`libusb` 문제.
-2. estimator 가 `[doa] ReSpeaker 방향 읽기 실패: ...` 를 stderr 로 찍으면 그 메시지가 원인.
-3. **그냥 udev 없이 쓰려면 3번(오디오 경로)** 으로. 방향 데이터는 거기서도 나온다.
+## 통합 실행과 보정
 
-## 5. (참고) systemd 상시 구동
-```ini
-[Service]
-WorkingDirectory=/home/<user>/emergency-sound-assist
-ExecStart=/home/<user>/emergency-sound-assist/.venv/bin/python -m doa.multi_live --no-led
-Restart=on-failure
+```bash
+python main.py --mic --channels 6 --device 2
+python -m doa.diag --truth front --device 2
+python -m doa.diag --truth rear --device 2
+python -m doa.diag --truth left --device 2
+python -m doa.diag --truth right --device 2
 ```
-모듈 실행은 **CWD 의존**이라 `WorkingDirectory` 를 반드시 레포 루트로 지정한다
-(`python -m doa.x` 는 그 위치에서만 `core`/`doa` import 가 해결됨).
+
+차량 장착 후 `doa/config.py`의 `REAR_RAW_DEG`, `MIRROR`, `MIC_RADIUS_M`, `CONF_MIN`,
+`LED_OFFSET`을 실측으로 확정한다.
+
+## 문제 해결
+
+| 증상 | 확인할 것 |
+|---|---|
+| ReSpeaker를 못 찾음 | `sd.query_devices()`에서 6채널 입력 번호 확인 후 `--device N` |
+| `Invalid number of channels` | 다른 마이크를 선택했거나 ReSpeaker 입력 채널 설정 오류 |
+| 계속 방향 불확실 | `--conf-min 0`으로 분포 확인 후 실제 환경에서 임계 조정 |
+| 좌우가 반대 | `doa/config.py`의 `MIRROR` |
+| 일정 각도로 회전됨 | `REAR_RAW_DEG`, 장착 방향, LED면 `LED_OFFSET` |
+| LED/자체 DoA Access denied | libusb와 udev 권한 확인 |
+
+세부 실행 옵션은 [DoA 실행 문서](running.md)를 참고한다.
