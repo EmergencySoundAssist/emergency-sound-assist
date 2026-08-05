@@ -26,7 +26,7 @@ Jetson은 일반 PyPI 패키지가 CUDA/TensorRT 빌드를 덮어쓸 수 있으�
 
 ```bash
 python main.py --demo
-python main.py --demo --view dashboard
+python main.py --demo --hud --hud-windowed     # HUD 화면까지 함께 본다(창 모드)
 ```
 
 WAV 파일은 모노 경로이므로 분류·접근은 동작하지만 방향은 `미상`이다.
@@ -39,7 +39,7 @@ ReSpeaker 통합 실행은 USB 6채널로 연다.
 
 ```bash
 python main.py --mic --channels 6
-python main.py --mic --channels 6 --view dashboard
+python main.py --mic --channels 6 --hud --hud-windowed
 python main.py --mic --channels 6 --device 2
 ```
 
@@ -47,7 +47,7 @@ python main.py --mic --channels 6 --device 2
 
 ```bash
 python main.py --mic --channels 6 --stt --stt-model small
-python main.py --mic --channels 6 --stt --stt-model medium --view dashboard
+python main.py --mic --channels 6 --stt --stt-model medium --hud
 ```
 
 통합 실행에서 `ch0`은 분류·차종·접근·STT, `ch1~4`는 방향에 사용하고 `ch5`는 사용하지 않는다.
