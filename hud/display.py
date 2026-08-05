@@ -44,7 +44,14 @@ class HudDisplay:
             (self._config.width, self._config.height), flags)
         pygame.display.set_caption("Emergency Sound Assist HUD")
         pygame.mouse.set_visible(False)
-        self._buf = pygame.Surface((self._config.width, self._config.height))
+        # 전체화면에서 SDL 이 요청 모드를 못 주면 더 큰 표면을 돌려준다. 설정값이 아니라
+        # 실제 표면 크기로 버퍼를 잡아야 반사(상하반전) 모드에서 화면 전체가 뒤집힌다.
+        # 렌더러는 draw() 에서 표면 크기를 보고 스스로 레이아웃을 다시 잡는다.
+        real = self._screen.get_size()
+        if real != (self._config.width, self._config.height):
+            print(f"[hud] 요청 {self._config.width}x{self._config.height} → 실제 "
+                  f"{real[0]}x{real[1]} — 실제 크기로 레이아웃을 잡습니다.", file=sys.stderr)
+        self._buf = pygame.Surface(real)
         self._renderer = Renderer(self._config)
 
     def _tick(self) -> None:
