@@ -377,7 +377,7 @@ def test_layout_bar_stays_inside_the_screen():
 # ---------------------------------------------------------------------------
 # 레이더 (v4) — 방향은 아크, 음압은 채워지는 링 수
 # ---------------------------------------------------------------------------
-from hud.card import RINGS, ARC_SPANS, ring_levels, arc_span
+from hud.card import RINGS, ARC_HALF_DEG, ring_levels, arc_center_deg, arc_bounds
 
 
 def test_ring_levels_fill_from_inside_out():
@@ -415,13 +415,49 @@ def test_ring_levels_are_monotonic_in_total():
     assert all(x <= y + 1e-9 for x, y in zip(tot, tot[1:])), "음압이 올라가는데 총량이 줄었다"
 
 
-def test_every_direction_gets_its_own_arc():
-    spans = [arc_span(d) for d in (Direction.FRONT, Direction.REAR,
-                                   Direction.LEFT, Direction.RIGHT)]
-    assert all(s is not None for s in spans)
-    assert len(set(spans)) == 4, "두 방향이 같은 아크를 쓴다"
+def test_every_direction_points_a_different_way():
+    from core.types import Direction
+    seen = {d: arc_center_deg(None, d) for d in
+            (Direction.FRONT, Direction.REAR, Direction.LEFT, Direction.RIGHT)}
+    assert all(v is not None for v in seen.values())
+    assert len(set(seen.values())) == 4, f"두 방향이 같은 각도를 쓴다: {seen}"
 
 
-def test_unknown_direction_has_no_arc():
-    """모르면 한 곳을 단정하지 않는다 — 렌더러가 네 방향을 균등하게 처리한다."""
-    assert arc_span(Direction.UNKNOWN) is None
+def test_unknown_direction_has_no_angle():
+    """모르면 한 곳을 단정하지 않는다 — 렌더러가 링 전체를 균등하게 처리한다."""
+    from core.types import Direction
+    assert arc_center_deg(None, Direction.UNKNOWN) is None
+
+
+def test_rear_left_and_rear_right_are_distinguishable():
+    """후방인데 어느 쪽인지 — 소리를 못 듣는 운전자에겐 어느 거울을 볼지의 문제다.
+
+    4분면으로 스냅하면 둘 다 '후방'이 되어 화면이 같아진다. DoA 가 주는 연속
+    각도를 그대로 써야 갈린다.
+    """
+    from doa.estimator import _to_vehicle_angle
+
+    def raw_for(vehicle_deg):
+        return float(min(range(360),
+                         key=lambda r: abs((_to_vehicle_angle(r) - vehicle_deg + 180) % 360 - 180)))
+
+    from core.types import Direction
+    right_rear = arc_center_deg(raw_for(150.0), Direction.REAR)   # 후방 우측
+    left_rear = arc_center_deg(raw_for(210.0), Direction.REAR)    # 후방 좌측
+    assert right_rear != left_rear, "후방 좌/우가 같은 각도로 뭉갰다"
+    # 화면 각도: 270=아래. 우후방은 270보다 크고(우하), 좌후방은 작다(좌하).
+    assert right_rear > 270.0 > left_rear
+
+
+def test_measured_angle_wins_over_the_quadrant_fallback():
+    from core.types import Direction
+    from doa.estimator import _to_vehicle_angle
+    raw = float(min(range(360),
+                    key=lambda r: abs((_to_vehicle_angle(r) - 150.0 + 180) % 360 - 180)))
+    assert arc_center_deg(raw, Direction.REAR) != arc_center_deg(None, Direction.REAR)
+
+
+def test_arc_bounds_are_centred_on_the_angle():
+    a0, a1 = arc_bounds(270.0)
+    assert (a0 + a1) / 2 == 270.0
+    assert a1 - a0 == 2 * ARC_HALF_DEG

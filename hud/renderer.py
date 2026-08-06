@@ -45,9 +45,13 @@ def vehicle_color(sound_text: str) -> tuple:
 
 # LED 스트립 디자인 확정값 (디자인 스튜디오에서 튜닝)
 # 세그먼트 높이·글로우 배수는 이제 Layout.seg_h / card.spl_to_glow 가 정한다.
-CAR_BODY = (50, 54, 66)     # 레이더 중앙 차 실루엣
-CAR_EDGE = (94, 98, 114)
-CAR_LAMP = (150, 155, 175)  # 헤드라이트 — 앞이 어느 쪽인지 알려준다
+# 레이더 중앙 차 — 위에서 본 형태. 지붕이 밝고 유리가 어두워야 입체로 읽힌다.
+CAR_BODY = (50, 54, 66)     # 차체(보닛·트렁크)
+CAR_ROOF = (82, 88, 106)    # 지붕 — 위에서 빛을 받아 가장 밝다
+CAR_GLASS = (24, 27, 38)    # 앞/뒤 유리 — 가장 어둡다
+CAR_EDGE = (104, 110, 128)
+CAR_LAMP = (232, 226, 190)  # 헤드라이트 — 앞이 어느 쪽인지 알려준다
+CAR_TAIL = (196, 72, 68)    # 후미등 — 뒤가 어느 쪽인지
 
 
 def _glow_segment(surface, x, y, w, h, color, b, glow=1.0):
@@ -173,7 +177,7 @@ class Renderer:
             else f"{view.direction_text} · {view.motion_text}"
         surface.blit(self._f_state.render(state, True, color), lo.state_xy)
 
-        self._draw_radar(surface, color, t, view.direction)
+        self._draw_radar(surface, color, t, view.angle_deg, view.direction)
         # spl_calibrated 를 여기서도 본다(viewmodel._level_text 와 이중 방어).
         # 한 곳만 지키면 뷰가 잘못 만들어졌을 때 없는 단위를 지어내 출력한다.
         if view.level_text and view.spl_calibrated:
@@ -198,48 +202,96 @@ class Renderer:
         pygame.draw.arc(g, (*color, alpha), box, a0, a1, width)
         surface.blit(g, (0, 0))
 
-    def _draw_radar(self, surface, color, t, direction):
-        """방향 = 어느 아크가 켜지는가, 음압 = 몇 링이 차오르는가.
+    def _draw_radar(self, surface, color, t, angle_deg, direction):
+        """방향 = 아크가 놓이는 각도, 음압 = 몇 링이 차오르는가.
 
-        꺼진 링도 흐리게 그린다 — 안 그리면 '5칸 중 3칸'이라는 척도가 사라지고
-        그냥 크기만 변하는 것으로 보인다.
+        꺼진 링은 완전한 타원으로 그린다 — 그게 '어디든 올 수 있다'는 척도가 되고,
+        그 위에 켜진 아크가 실제 방향을 가리킨다. 4분면으로 스냅하지 않으므로
+        후방 우측과 후방 좌측이 화면에서 갈린다.
         """
         lo = self._lo
         levels = hud_card.ring_levels(t, hud_card.RINGS)
-        span = hud_card.arc_span(direction)
-        for d, (a0, a1) in hud_card.ARC_SPANS.items():
-            on = (span is not None and d is direction)
-            unknown = (span is None)
-            for r, lv in enumerate(levels):
-                if (on or unknown) and lv > 0:
-                    b = lv * (1.0 - r * 0.10)
-                    if unknown:
-                        # 모를 땐 네 방향을 똑같이, 그러나 약하게 — 한 곳을 단정하지 않는다
-                        b *= 0.42
-                    self._arc(surface, r, a0, a1, color, lo.ring_w + 4, alpha=int(52 * b))
-                    self._arc(surface, r, a0, a1,
-                              tuple(int(c * b) for c in color), lo.ring_w)
-                else:
-                    self._arc(surface, r, a0, a1, DIM, lo.ring_w)
+        center = hud_card.arc_center_deg(angle_deg, direction)
+
+        for r, lv in enumerate(levels):
+            self._ring(surface, r, DIM)                       # 꺼진 척도
+            if lv <= 0:
+                continue
+            b = lv * (1.0 - r * 0.10)
+            if center is None:
+                # 모를 땐 링 전체를 균등하게 약하게 — 한 곳을 단정하지 않는다
+                self._ring(surface, r, tuple(int(c * b * 0.42) for c in color))
+                continue
+            a0, a1 = hud_card.arc_bounds(center)
+            self._arc(surface, r, a0, a1, color, lo.ring_w + 4, alpha=int(52 * b))
+            self._arc(surface, r, a0, a1, tuple(int(c * b) for c in color), lo.ring_w)
         self._draw_car(surface)
 
+    def _ring(self, surface, ring, color):
+        """링 하나를 완전한 타원으로. 켜진 아크가 놓일 자리를 보여 주는 척도다."""
+        lo = self._lo
+        pad = lo.ring_w // 2 + ring * lo.ring_gap
+        box = pygame.Rect(lo.radar_cx - lo.radar_rx - pad, lo.radar_cy - lo.radar_ry - pad,
+                          (lo.radar_rx + pad) * 2, (lo.radar_ry + pad) * 2)
+        pygame.draw.ellipse(surface, color, box, lo.ring_w)
+
     def _draw_car(self, surface):
-        """위에서 본 차. 앞이 좁고 헤드라이트가 있어 도형만으로 앞뒤가 읽힌다."""
+        """위에서 본 차. 지붕(밝음)·유리(어두움)·등(앞 흰색/뒤 빨강)으로 입체와 방향을 준다.
+
+        평평한 회색 덩어리면 무슨 도형인지 모르고, 앞뒤도 안 읽힌다. 명암을 층으로
+        쌓으면 작은 크기에서도 '위에서 본 차'로 읽힌다.
+        """
         lo = self._lo
         cx, cy = lo.radar_cx, lo.radar_cy
-        cw, ch = max(12, lo.radar_rx // 3), max(20, lo.radar_ry * 6 // 7)
+        # 위에서 본 차는 길이:폭이 대략 2:1 이다. 정사각형에 가까우면 승합차로 보인다.
+        cw = max(14, int(lo.radar_rx / 3.6))
+        ch = max(28, int(lo.radar_ry * 1.18))
         top, bot = cy - ch // 2, cy + ch // 2
-        body = [(cx - cw * 0.32, top), (cx + cw * 0.32, top),
-                (cx + cw * 0.5, top + ch * 0.26), (cx + cw * 0.5, bot - ch * 0.13),
-                (cx + cw * 0.36, bot), (cx - cw * 0.36, bot),
-                (cx - cw * 0.5, bot - ch * 0.13), (cx - cw * 0.5, top + ch * 0.26)]
+        hw = cw / 2.0
+
+        def yy(f):      # 차 앞(0.0)에서 뒤(1.0) 사이 비율 → y
+            return top + ch * f
+
+        # 바닥 그림자 — 차가 지면에서 떠 보이게
+        sh = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        pygame.draw.ellipse(sh, (0, 0, 0, 110),
+                            pygame.Rect(int(cx - hw * 1.25), int(bot - ch * 0.12),
+                                        int(hw * 2.5), int(ch * 0.30)))
+        surface.blit(sh, (0, 0))
+
+        body = [(cx - hw * 0.62, yy(0.0)), (cx + hw * 0.62, yy(0.0)),
+                (cx + hw, yy(0.16)), (cx + hw, yy(0.86)),
+                (cx + hw * 0.72, yy(1.0)), (cx - hw * 0.72, yy(1.0)),
+                (cx - hw, yy(0.86)), (cx - hw, yy(0.16))]
         pygame.draw.polygon(surface, CAR_BODY, body)
+
+        # 지붕(캐빈) — 가장 밝은 면
+        roof = pygame.Rect(int(cx - hw * 0.74), int(yy(0.34)),
+                           int(hw * 1.48), int(ch * 0.34))
+        pygame.draw.rect(surface, CAR_ROOF, roof, border_radius=max(2, int(hw * 0.22)))
+
+        # 앞/뒤 유리 — 지붕과 보닛/트렁크 사이의 어두운 띠
+        for y0, y1 in ((0.26, 0.35), (0.67, 0.76)):
+            pygame.draw.polygon(surface, CAR_GLASS, [
+                (cx - hw * 0.60, yy(y0)), (cx + hw * 0.60, yy(y0)),
+                (cx + hw * 0.74, yy(y1)), (cx - hw * 0.74, yy(y1))])
+
+        # 사이드미러
+        for sx in (-1, 1):
+            pygame.draw.circle(surface, CAR_EDGE,
+                               (int(cx + sx * hw * 1.06), int(yy(0.36))),
+                               max(1, int(hw * 0.11)))
+
         pygame.draw.polygon(surface, CAR_EDGE, body, 2)
-        pygame.draw.line(surface, CAR_EDGE, (cx - cw * 0.30, top + ch * 0.28),
-                         (cx + cw * 0.30, top + ch * 0.28), 2)
-        for dx in (-cw * 0.26, cw * 0.26):
-            pygame.draw.circle(surface, CAR_LAMP, (int(cx + dx), int(top + 6)),
-                               max(2, lo.ring_w // 2))
+
+        lamp_w, lamp_h = max(2, int(hw * 0.30)), max(2, int(ch * 0.045))
+        for sx in (-1, 1):
+            pygame.draw.rect(surface, CAR_LAMP,
+                             (int(cx + sx * hw * 0.52 - lamp_w / 2), int(yy(0.03)),
+                              lamp_w, lamp_h), border_radius=1)
+            pygame.draw.rect(surface, CAR_TAIL,
+                             (int(cx + sx * hw * 0.46 - lamp_w / 2), int(yy(0.94)),
+                              lamp_w, lamp_h), border_radius=1)
 
     def _draw_db(self, surface, text, color):
         """음압 숫자 — 레이더 오른쪽, 세로 중앙."""
@@ -257,7 +309,7 @@ class Renderer:
         self._frame = (self._frame + 1) % 100000
         lo = self._lo
         surface.blit(self._f_veh.render("듣는 중", True, MUTED), lo.veh_xy)
-        self._draw_radar(surface, MUTED, 0.0, Direction.UNKNOWN)
+        self._draw_radar(surface, MUTED, 0.0, None, Direction.UNKNOWN)
         if view.subtitle:
             lines = hud_card.wrap_text(
                 view.subtitle, lambda s: self._f_cap.size(s)[0],

@@ -272,11 +272,16 @@ class Layout:
 RINGS = 5                       # 음압 척도. 안쪽에서 바깥으로 찬다.
 
 # 화면 기준 각도(pygame: 0=오른쪽, 반시계 증가). 위=전방.
-ARC_SPANS = {
-    Direction.FRONT: (55.0, 125.0),
-    Direction.RIGHT: (-35.0, 35.0),
-    Direction.REAR: (235.0, 305.0),
-    Direction.LEFT: (145.0, 215.0),
+# 방향은 4분면으로 스냅하지 않는다 — DoA 는 연속 방위각을 주고, 그걸 버리면
+# "후방인데 좌측인지 우측인지" 를 알 수 없다. 아크를 측정 각도에 직접 놓는다.
+ARC_HALF_DEG = 35.0             # 점등 아크의 반폭
+
+# 각도가 아예 없을 때(1채널 등)의 이산 폴백 — 사분면 중심.
+_QUADRANT_SCREEN_DEG = {
+    Direction.FRONT: 90.0,
+    Direction.RIGHT: 0.0,
+    Direction.REAR: 270.0,
+    Direction.LEFT: 180.0,
 }
 
 
@@ -304,10 +309,21 @@ def ring_levels(t: float, rings: int = RINGS) -> List[float]:
     return out
 
 
-def arc_span(direction: Direction):
-    """방향 → (시작각, 끝각). 방향 미상이면 None — 한 곳을 단정하지 않는다.
+def arc_center_deg(angle_deg: Optional[float], direction: Direction) -> Optional[float]:
+    """점등 아크의 중심각(화면 기준). 방향을 모르면 None.
 
-    레이더는 Direction 4분면만 쓴다. 연속 각도(angle_deg)는 쓰지 않는다: 실제
-    방향 해상도가 4방향뿐인데 15칸 그리드로 보여주던 것이 과장이었다.
+    angle_deg 가 있으면 그대로 쓴다. 4분면으로 스냅하면 "후방에서 오는데 좌측인지
+    우측인지" 를 알 수 없게 되는데, 소리를 못 듣는 운전자에게는 어느 쪽 거울을
+    볼지가 바로 그 정보다.
+
+    화면 각도 = 90 - 차량각 (차량각: 전0/우90/후180/좌270 → 화면: 위/오른쪽/아래/왼쪽).
     """
-    return ARC_SPANS.get(direction)
+    if angle_deg is not None:
+        from doa.estimator import _to_vehicle_angle   # 장착 보정 재사용(DRY)
+        return (90.0 - _to_vehicle_angle(angle_deg)) % 360.0
+    return _QUADRANT_SCREEN_DEG.get(direction)
+
+
+def arc_bounds(center_deg: float, half: float = ARC_HALF_DEG):
+    """중심각 → (시작각, 끝각). 렌더러가 pygame.draw.arc 에 그대로 넘긴다."""
+    return center_deg - half, center_deg + half
