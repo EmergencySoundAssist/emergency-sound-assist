@@ -190,10 +190,7 @@ class Renderer:
 
     def _arc(self, surface, ring, a0, a1, color, width, alpha=None):
         """레이더 링 하나의 호. alpha 를 주면 글로우용으로 반투명하게 겹쳐 그린다."""
-        lo = self._lo
-        pad = lo.ring_w // 2 + ring * lo.ring_gap
-        box = pygame.Rect(lo.radar_cx - lo.radar_rx - pad, lo.radar_cy - lo.radar_ry - pad,
-                          (lo.radar_rx + pad) * 2, (lo.radar_ry + pad) * 2)
+        box = self._ring_box(ring)
         a0, a1 = math.radians(a0), math.radians(a1)
         if alpha is None:
             pygame.draw.arc(surface, color, box, a0, a1, width)
@@ -220,20 +217,45 @@ class Renderer:
             b = lv * (1.0 - r * 0.10)
             if center is None:
                 # 모를 땐 링 전체를 균등하게 약하게 — 한 곳을 단정하지 않는다
-                self._ring(surface, r, tuple(int(c * b * 0.42) for c in color))
+                self._ring(surface, r, tuple(int(c * b * 0.42) for c in color),
+                           lighting=False)
                 continue
             a0, a1 = hud_card.arc_bounds(center)
-            self._arc(surface, r, a0, a1, color, lo.ring_w + 4, alpha=int(52 * b))
-            self._arc(surface, r, a0, a1, tuple(int(c * b) for c in color), lo.ring_w)
+            w = self._ring_width(r)
+            self._arc(surface, r, a0, a1, color, w + 4, alpha=int(52 * b))
+            self._arc(surface, r, a0, a1, tuple(int(c * b) for c in color), w)
         self._draw_car(surface)
 
-    def _ring(self, surface, ring, color):
-        """링 하나를 완전한 타원으로. 켜진 아크가 놓일 자리를 보여 주는 척도다."""
+    def _ring_box(self, ring):
         lo = self._lo
         pad = lo.ring_w // 2 + ring * lo.ring_gap
-        box = pygame.Rect(lo.radar_cx - lo.radar_rx - pad, lo.radar_cy - lo.radar_ry - pad,
-                          (lo.radar_rx + pad) * 2, (lo.radar_ry + pad) * 2)
-        pygame.draw.ellipse(surface, color, box, lo.ring_w)
+        return pygame.Rect(lo.radar_cx - lo.radar_rx - pad, lo.radar_cy - lo.radar_ry - pad,
+                           (lo.radar_rx + pad) * 2, (lo.radar_ry + pad) * 2)
+
+    def _ring_width(self, ring):
+        """바깥 링일수록 얇게 — 멀어질수록 가늘어 보이는 깊이 단서.
+
+        기하(링의 위치·크기)는 건드리지 않는다. 원근으로 눕히면 아래쪽 링들이
+        뭉쳐서 '몇 칸 중 몇 칸'이 안 읽히는데, 그게 이 화면의 핵심 정보다.
+        두께와 조명만으로 깊이를 주면 척도도 방향 대칭도 그대로다.
+        """
+        return max(2, self._lo.ring_w - ring)
+
+    def _ring(self, surface, ring, color, lighting=True):
+        """링 하나를 완전한 타원으로. 켜진 아크가 놓일 자리를 보여 주는 척도다.
+
+        lighting=True 면 아래쪽 반을 한 번 더 밝게 덧그린다 — 아래에서 빛이 오는
+        것처럼 보여 평면이 아니라 접시로 읽힌다.
+
+        ⚠ 방향 미상일 때 켜는 링에는 조명을 주지 않는다. 아래가 밝으면 운전자가
+        '후방'으로 읽는데, 그 상태의 뜻은 정확히 '어디인지 모른다' 이다. 조명은
+        척도의 깊이 단서지 방향 표시가 아니다.
+        """
+        box, w = self._ring_box(ring), self._ring_width(ring)
+        pygame.draw.ellipse(surface, color, box, w)
+        if lighting:
+            lit = tuple(min(255, int(c * 1.55) + 6) for c in color)
+            pygame.draw.arc(surface, lit, box, math.radians(196), math.radians(344), w)
 
     def _draw_car(self, surface):
         """위에서 본 차. 지붕(밝음)·유리(어두움)·등(앞 흰색/뒤 빨강)으로 입체와 방향을 준다.

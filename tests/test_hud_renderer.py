@@ -172,14 +172,20 @@ def test_reference_resolution_is_unchanged_by_the_letterbox_path():
 # 레이더 렌더 (v4) — 방향은 사분면 위치로, 음압은 켜진 링 양으로 확인한다
 # ---------------------------------------------------------------------------
 
-def _lit_by_quadrant(surf, lo, thresh=120):
-    """레이더 영역을 상/하/좌/우로 나눠 밝은 픽셀 수를 센다."""
+def _lit_by_quadrant(surf, lo, thresh=60):
+    """레이더 영역을 상/하/좌/우로 나눠 **차종색** 픽셀 수를 센다.
+
+    밝기로 세면 안 된다: 링 아래쪽 조명이 꺼진 회색 링까지 밝히므로 어떤 방향이든
+    아래가 이긴다. 차종색은 채도가 있고(채널 최대-최소 > 60) 링은 회색이라 색으로
+    가르면 조명과 무관하게 '켜진 아크'만 세어진다.
+    """
     reach = lo.radar_ry + lo.ring_w + (5 - 1) * lo.ring_gap
     reach_x = lo.radar_rx + lo.ring_w + (5 - 1) * lo.ring_gap
     out = {"위": 0, "아래": 0, "좌": 0, "우": 0}
     for y in range(max(0, lo.radar_cy - reach), min(360, lo.radar_cy + reach)):
         for x in range(max(0, lo.radar_cx - reach_x), min(1280, lo.radar_cx + reach_x)):
-            if sum(surf.get_at((x, y))[:3]) <= thresh:
+            c = surf.get_at((x, y))[:3]
+            if max(c) - min(c) <= thresh:      # 회색(링·배경) → 제외
                 continue
             dy, dx = y - lo.radar_cy, x - lo.radar_cx
             if abs(dy) > abs(dx):
