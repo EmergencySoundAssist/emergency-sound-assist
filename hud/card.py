@@ -218,6 +218,13 @@ class Layout:
     f_db: int
     f_unit: int
     f_cap: int
+    # 레이더(v4) — 중심·반지름·링 간격. 바/미터 좌표를 대체한다.
+    radar_cx: int
+    radar_cy: int
+    radar_rx: int
+    radar_ry: int
+    ring_gap: int
+    ring_w: int
 
     @classmethod
     def for_size(cls, w: int, h: int) -> "Layout":
@@ -248,4 +255,75 @@ class Layout:
             f_db=max(12, round(h * 0.08889)),
             f_unit=max(10, round(h * 0.05278)),
             f_cap=max(14, round(h * 0.10556)),
+            # 레이더는 자막 줄(cap_cy) 위에서 끝나야 한다. 아래 값들은
+            # radar_cy + radar_ry + ring_w/2 + (RINGS-1)*ring_gap < cap_cy 를 만족한다.
+            radar_cx=round(w * 0.54688),
+            radar_cy=round(h * 0.43889),
+            radar_rx=round(w * 0.11719),
+            radar_ry=round(h * 0.20000),
+            ring_gap=max(5, round(h * 0.03333)),
+            ring_w=max(3, round(h * 0.01667)),
         )
+
+
+# ── 레이더 (v4) — 방향은 아크 위치, 음압은 채워지는 링 수 ───────────────────
+# 가로 막대는 좌우 축만 표현할 수 있어 전/후를 담을 자리가 없었다(전방은 바를 숨기고
+# 후방은 중앙으로 밀어넣는 식). 네 방향 아크를 두면 각자 자리를 갖는다.
+RINGS = 5                       # 음압 척도. 안쪽에서 바깥으로 찬다.
+
+# 화면 기준 각도(pygame: 0=오른쪽, 반시계 증가). 위=전방.
+# 방향은 4분면으로 스냅하지 않는다 — DoA 는 연속 방위각을 주고, 그걸 버리면
+# "후방인데 좌측인지 우측인지" 를 알 수 없다. 아크를 측정 각도에 직접 놓는다.
+ARC_HALF_DEG = 35.0             # 점등 아크의 반폭
+
+# 각도가 아예 없을 때(1채널 등)의 이산 폴백 — 사분면 중심.
+_QUADRANT_SCREEN_DEG = {
+    Direction.FRONT: 90.0,
+    Direction.RIGHT: 0.0,
+    Direction.REAR: 270.0,
+    Direction.LEFT: 180.0,
+}
+
+
+def ring_levels(t: float, rings: int = RINGS) -> List[float]:
+    """음압 강도 t(0~1) → 링별 밝기 0~1. 안쪽 링이 먼저 찬다.
+
+    칸 수만 쓰면 단계가 rings 개뿐이라 79dB 와 88dB 가 똑같이 3칸으로 뭉친다
+    (9dB 차이는 소리 세기로 약 8배다). 칸 수를 척도로 두고 **마지막 칸의 밝기**로
+    그 사이를 메운다 — 볼륨 바의 마지막 칸이 반쯤 차는 것과 같은 원리다.
+    부분 칸에 바닥 0.25 를 둬서 '켜지다 만' 상태가 눈에 보이게 한다.
+
+    꺼진 링(0.0)도 렌더러가 흐리게 그려야 '몇 칸 중 몇 칸'이라는 척도가 읽힌다.
+    """
+    if t <= 0:
+        return [0.0] * rings
+    x = max(t, 0.5 / rings) * rings         # 아주 작은 음압도 첫 칸은 보이게
+    out: List[float] = []
+    for r in range(rings):
+        if r + 1 <= x:
+            out.append(1.0)
+        elif r < x:
+            out.append(0.25 + 0.75 * (x - r))
+        else:
+            out.append(0.0)
+    return out
+
+
+def arc_center_deg(angle_deg: Optional[float], direction: Direction) -> Optional[float]:
+    """점등 아크의 중심각(화면 기준). 방향을 모르면 None.
+
+    angle_deg 가 있으면 그대로 쓴다. 4분면으로 스냅하면 "후방에서 오는데 좌측인지
+    우측인지" 를 알 수 없게 되는데, 소리를 못 듣는 운전자에게는 어느 쪽 거울을
+    볼지가 바로 그 정보다.
+
+    화면 각도 = 90 - 차량각 (차량각: 전0/우90/후180/좌270 → 화면: 위/오른쪽/아래/왼쪽).
+    """
+    if angle_deg is not None:
+        from doa.estimator import _to_vehicle_angle   # 장착 보정 재사용(DRY)
+        return (90.0 - _to_vehicle_angle(angle_deg)) % 360.0
+    return _QUADRANT_SCREEN_DEG.get(direction)
+
+
+def arc_bounds(center_deg: float, half: float = ARC_HALF_DEG):
+    """중심각 → (시작각, 끝각). 렌더러가 pygame.draw.arc 에 그대로 넘긴다."""
+    return center_deg - half, center_deg + half

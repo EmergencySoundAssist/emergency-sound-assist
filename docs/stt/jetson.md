@@ -106,8 +106,50 @@ python -u main.py --mic --channels 6 --stt --stt-model small
 5. 여유가 있을 때만 `medium`으로 올린다.
 
 ```bash
-python -u main.py --mic --channels 6 --stt --stt-model medium --view dashboard
+python -u main.py --mic --channels 6 --stt --stt-model medium
 ```
+
+## HUD 화면 (`--hud`)
+
+HDMI 직결 화면에 띄운다. 개발·검증은 창 모드로 먼저 하고, 확인이 끝나면 전체화면으로 올린다.
+
+```bash
+python -u main.py --mic --channels 6 --stt --stt-model small --hud --hud-windowed
+python -u main.py --mic --channels 6 --stt --stt-model small --hud
+```
+
+한글 폰트가 `□`로 나오면 번들 폰트 로드가 실패한 것이다. 시스템 폰트를 깔면 폴백한다.
+
+```bash
+sudo apt install -y fonts-nanum
+```
+
+윈드실드 반사 설치에서는 상하반전이 필요하다. 시작할 때 `--hud-flip`, 실행 중에는 `F` 키로 토글한다.
+종료는 `ESC` 또는 `Q`.
+
+확인할 것:
+
+1. 상태가 바뀌어도 글자·LED 칸·미터가 **같은 자리**에 있는지 (고정 그리드가 실기에서도 성립하는지)
+2. 사이렌이 실제로 올 때 미터가 자라고 퍼짐이 빨라지는지
+3. 방향 문구와 켜지는 칸 위치가 서로 맞는지 — DoA가 없으면 `방향 미상`이 떠야 하고,
+   그때 **칸이 중앙에 켜져도 "후방"이라고 읽으면 안 된다**
+4. 직사광·반사 상태에서 미터의 빈 트랙과 채워진 부분이 구분되는지
+
+### 부팅 자동시작 (systemd)
+
+`deploy/emergency-hud.service`가 준비돼 있다. 사용자·경로가 `dcnm`/`/home/dcnm/emergency-sound-assist`
+기준이므로 다르면 파일을 먼저 고친다.
+
+```bash
+sudo cp deploy/emergency-hud.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now emergency-hud
+systemctl status emergency-hud
+journalctl -u emergency-hud -f
+```
+
+`graphical.target` 이후에 뜨고 `DISPLAY=:0`·`XAUTHORITY`를 명시하므로 로그인 세션 없이도 그려진다.
+재부팅해서 화면이 자동으로 올라오는지가 최종 확인이다.
 
 ## CPU 폴백
 
