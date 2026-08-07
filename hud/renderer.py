@@ -107,6 +107,7 @@ class Renderer:
         self._font_path = config.font_path
         self._frame = 0
         self._size = None                       # 마지막으로 레이아웃을 잡은 박스 크기
+        self._prev_arc_deg = None               # 아크 스무딩용 이전 프레임 각도
         # 설계 비율(기본 1280:360 ≈ 3.56:1). 윈드실드 띠를 전제로 잡은 값이라,
         # 화면이 더 정사각형에 가까워도 이 비율을 유지해야 배치가 무너지지 않는다.
         self._aspect = config.width / max(1, config.height)
@@ -209,6 +210,14 @@ class Renderer:
         lo = self._lo
         levels = hud_card.ring_levels(t, hud_card.RINGS)
         center = hud_card.arc_center_deg(angle_deg, direction)
+
+        # ── 아크 스무딩: 이전 프레임 각도에서 목표로 매 프레임 15%씩 보간 ──
+        if center is not None:
+            if self._prev_arc_deg is not None:
+                center = hud_card.angle_lerp(self._prev_arc_deg, center, 0.15)
+            self._prev_arc_deg = center
+        else:
+            self._prev_arc_deg = None           # 방향 미상이면 보간 리셋
 
         for r, lv in enumerate(levels):
             self._ring(surface, r, DIM)                       # 꺼진 척도

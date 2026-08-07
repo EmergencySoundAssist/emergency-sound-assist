@@ -327,3 +327,16 @@ def arc_center_deg(angle_deg: Optional[float], direction: Direction) -> Optional
 def arc_bounds(center_deg: float, half: float = ARC_HALF_DEG):
     """중심각 → (시작각, 끝각). 렌더러가 pygame.draw.arc 에 그대로 넘긴다."""
     return center_deg - half, center_deg + half
+
+
+def angle_lerp(prev: float, target: float, alpha: float) -> float:
+    """360° 원 위에서 최단 경로 선형 보간.
+
+    prev·target 은 0~360 화면 각도. alpha(0~1)가 클수록 빠르게 쫓는다.
+    350° → 10° 를 340° 역회전이 아니라 20° 순회전으로 돌아야 HUD 에서
+    방향 전환이 자연스럽다. 차(delta)를 -180~+180 범위로 정규화해 해결한다.
+    """
+    delta = (target - prev) % 360.0
+    if delta > 180.0:
+        delta -= 360.0          # 짧은 쪽으로
+    return (prev + alpha * delta) % 360.0

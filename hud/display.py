@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from dataclasses import replace
 
 import pygame
 
@@ -24,6 +25,11 @@ class HudDisplay:
         self._screen = None
         self._buf = None
         self._renderer = None
+        self._doa_poller = None
+
+    def set_doa_poller(self, poller) -> None:
+        """별도 고속 DoA 폴러 연결."""
+        self._doa_poller = poller
 
     def update(self, fused) -> None:
         """파이프라인 스레드가 최신 결과를 밀어넣음(블로킹 X)."""
@@ -67,6 +73,12 @@ class HudDisplay:
                     self._config.reflect = not self._config.reflect
         with self._lock:
             fused = self._latest
+            
+        if fused is not None and self._doa_poller is not None:
+            latest_dir = self._doa_poller.latest()
+            if latest_dir is not None:
+                fused = replace(fused, direction=latest_dir)
+                
         view = HudView.from_fused(fused) if fused is not None else None
         try:
             if self._config.reflect:

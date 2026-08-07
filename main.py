@@ -93,7 +93,7 @@ def run_stream(chunks, stt_worker=None, hud=None, sender=None) -> None:
             stt_worker.stop()
 
 
-def _run_with_hud(source, stt_worker, args, sender=None) -> None:
+def _run_with_hud(source, stt_worker, args, sender=None, doa_poller=None) -> None:
     """--hud: 파이프라인을 백그라운드 스레드로, pygame 렌더 루프를 메인 스레드에서."""
     try:
         from hud.config import HudConfig
@@ -107,6 +107,9 @@ def _run_with_hud(source, stt_worker, args, sender=None) -> None:
     import threading
     cfg = HudConfig(fullscreen=not args.hud_windowed, reflect=args.hud_flip)
     hud = HudDisplay(cfg)
+    if doa_poller:
+        hud.set_doa_poller(doa_poller)
+        
     # --demo/--wav처럼 유한 소스면 파이프라인 스레드는 소스 소진 시 끝나지만, HUD 창은
     # 의도적으로 ESC/Q 입력 전까지 마지막 프레임을 유지한다 (daemon 스레드라 종료를 막지 않음).
     worker = threading.Thread(
@@ -176,20 +179,30 @@ def main() -> None:
         sender.start()
         print("== BLE: 전송 활성화 (폰 GATT 서버를 서비스 UUID로 검색) ==")
 
-    if args.demo:
-        print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
-        source = iter_chunks_from_array(_synth_passby())
-    elif args.wav:
-        print(f"== WAV: {args.wav} ==")
-        source = iter_chunks_from_array(load_wav(args.wav))
-    else:
-        print("== MIC: 실시간 (Ctrl+C 종료) ==")
-        source = iter_chunks_from_mic(device=args.device, channels=args.channels)
-
+    doa_poller = None
     if args.hud:
-        _run_with_hud(source, stt_worker, args, sender)
-    else:
-        run_stream(source, stt_worker, sender=sender)
+        from doa.doa_poller import DoaPoller
+        doa_poller = DoaPoller()
+        doa_poller.start()
+
+    try:
+        if args.demo:
+            print("== DEMO: 합성 사이렌 통과 (60km/h, 측면 8m) ==")
+            source = iter_chunks_from_array(_synth_passby(), doa_callback=doa_poller.push if doa_poller else None)
+        elif args.wav:
+            print(f"== WAV: {args.wav} ==")
+            source = iter_chunks_from_array(load_wav(args.wav), doa_callback=doa_poller.push if doa_poller else None)
+        else:
+            print("== MIC: 실시간 (Ctrl+C 종료) ==")
+            source = iter_chunks_from_mic(device=args.device, channels=args.channels, doa_callback=doa_poller.push if doa_poller else None)
+    
+        if args.hud:
+            _run_with_hud(source, stt_worker, args, sender, doa_poller)
+        else:
+            run_stream(source, stt_worker, sender=sender)
+    finally:
+        if doa_poller:
+            doa_poller.stop()
 
 
 if __name__ == "__main__":

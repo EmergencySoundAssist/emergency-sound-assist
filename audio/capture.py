@@ -34,11 +34,25 @@ def iter_chunks_from_array(
     samples: np.ndarray,
     sample_rate: int = SAMPLE_RATE,
     chunk_seconds: float = CHUNK_SECONDS,
+    doa_callback=None,
+    doa_interval: float = 0.25,
 ) -> Iterator[AudioChunk]:
     """긴 오디오 배열을 1초짜리 청크들로 잘라서 내보낸다(파일 테스트용)."""
-    n = int(sample_rate * chunk_seconds)
-    for start in range(0, len(samples) - n + 1, n):
-        yield AudioChunk(samples=samples[start:start + n], sample_rate=sample_rate)
+    import time
+    n_total = int(sample_rate * chunk_seconds)
+    n_sub = int(sample_rate * doa_interval) if doa_callback else n_total
+    
+    for start in range(0, len(samples) - n_total + 1, n_total):
+        # 배열에서도 실제 시간처럼 시뮬레이션하기 위해 서브청크로 쪼갠다
+        cur = start
+        while cur < start + n_total:
+            end = min(cur + n_sub, start + n_total)
+            if doa_callback:
+                doa_callback(samples[cur:end])
+                time.sleep(doa_interval)  # 파일 시뮬레이션 시 실시간처럼
+            cur = end
+        
+        yield AudioChunk(samples=samples[start:start + n_total], sample_rate=sample_rate)
 
 
 def iter_chunks_from_mic(
@@ -46,6 +60,8 @@ def iter_chunks_from_mic(
     chunk_seconds: float = CHUNK_SECONDS,
     device: int | None = None,
     channels: int = 1,
+    doa_callback=None,
+    doa_interval: float = 0.25,
 ) -> Iterator[AudioChunk]:
     """실시간 마이크에서 1초씩 읽어 청크로 내보낸다.
 
@@ -62,11 +78,23 @@ def iter_chunks_from_mic(
     device, label = _resolve_input_device(device, channels)
     print(f"[audio] 입력 장치: {label} · {channels}ch {sample_rate}Hz", file=sys.stderr)
     watch = SilenceWatch()
-    n = int(sample_rate * chunk_seconds)
+    n_total = int(sample_rate * chunk_seconds)
+    n_sub = int(sample_rate * doa_interval) if doa_callback else n_total
+    
     with sd.InputStream(samplerate=sample_rate, channels=channels,
                         dtype="float32", device=device) as stream:
         while True:
-            data, _ = stream.read(n)
+            full_data = []
+            cur_len = 0
+            while cur_len < n_total:
+                read_n = min(n_sub, n_total - cur_len)
+                data, _ = stream.read(read_n)
+                if doa_callback:
+                    doa_callback(data)
+                full_data.append(data)
+                cur_len += read_n
+            
+            data = np.concatenate(full_data, axis=0) if len(full_data) > 1 else full_data[0]
             samples = data[:, 0].copy() if channels == 1 else data.copy()
             warn = watch.update(samples)
             if warn:
