@@ -44,7 +44,6 @@ def vehicle_color(sound_text: str) -> tuple:
 
 
 # LED 스트립 디자인 확정값 (디자인 스튜디오에서 튜닝)
-# 세그먼트 높이·글로우 배수는 이제 Layout.seg_h / card.spl_to_glow 가 정한다.
 # 레이더 중앙 차 — 위에서 본 형태. 지붕이 밝고 유리가 어두워야 입체로 읽힌다.
 CAR_BODY = (50, 54, 66)     # 차체(보닛·트렁크)
 CAR_ROOF = (82, 88, 106)    # 지붕 — 위에서 빛을 받아 가장 밝다

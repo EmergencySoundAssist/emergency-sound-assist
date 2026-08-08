@@ -11,32 +11,8 @@ from typing import Callable, List, Optional, Tuple
 from core.types import Direction, Motion
 
 
-def direction_to_index(angle_deg: Optional[float], direction: Direction, n: int = 15) -> int:
-    """점등 중심 세그먼트 인덱스(0=맨좌 ~ n-1=맨우).
-
-    angle_deg 있으면 -90°~+90°를 선형 매핑(0°=중앙). 없으면 이산 방향으로 스냅.
-    """
-    mid = n // 2
-    if angle_deg is not None:
-        a = max(-90.0, min(90.0, angle_deg))          # 범위 고정
-        return round((a + 90.0) / 180.0 * (n - 1))
-    # 이산 폴백
-    if direction is Direction.LEFT:
-        return n // 4
-    if direction is Direction.RIGHT:
-        return n - 1 - n // 4
-    return mid                                         # FRONT/REAR/UNKNOWN → 중앙
 
 
-def segment_brightness(seg_index: int, center_index: int, radius: int = 2) -> float:
-    """세그먼트 밝기 0.0~1.0. 중심 1.0, 선형 감쇠, 거리==radius(및 그 밖) 0.
-
-    분모를 radius 로 두어 dist==radius 에서 정확히 0 이 된다(경계=꺼짐).
-    """
-    dist = abs(seg_index - center_index)
-    if dist >= radius:
-        return 0.0
-    return 1.0 - (dist / radius)
 
 
 def _ellipsize(text: str, measure: Callable[[str], int], max_width: int) -> str:
@@ -104,49 +80,14 @@ def dots_brightness(frame: int, count: int = 3, period: int = 24) -> List[float]
     return out
 
 
-def azimuth_to_bar_index(raw_deg: float, n: int = 15) -> Optional[int]:
-    """raw DoA 방위각 → 가로 바 인덱스(0=좌 ~ n-1=우). 전방이면 None(숨김).
-
-    estimator 의 차량 보정(_to_vehicle_angle)을 재사용해 raw(0~359, 보드 기준)를
-    차량 기준(전0/우90/후180/좌270)으로 바꾼 뒤 가로 위치로 편다:
-      우(90°)→오른쪽 끝, 후(180°)→중앙, 좌(270°)→왼쪽 끝.
-    전방(315~360° 및 0~45°)은 운전자가 직접 보는 방향이라 바를 숨긴다(None).
-    """
-    from doa.estimator import _to_vehicle_angle    # 케이블=후방 보정 재사용(DRY)
-    veh = _to_vehicle_angle(raw_deg)               # 0=전 90=우 180=후 270=좌
-    if veh >= 315.0 or veh < 45.0:
-        return None                                # 전방 → 숨김
-    frac = (270.0 - veh) / 180.0                   # 우90→1.0, 후180→0.5, 좌270→0.0
-    frac = max(0.0, min(1.0, frac))
-    return int(round(frac * (n - 1)))
 
 
-def direction_visible(direction: Direction) -> bool:
-    """긴급 화면에서 이 방향의 바를 표시할지(각도가 없을 때의 이산 폴백). 전방만 숨긴다."""
-    return direction is not Direction.FRONT
 
 
-# ── 퍼지는 깜빡임(ripple) 상수 · should_ripple ──────────────────────────────
-RIPPLE_PERIOD_FAR = 28      # 멀 때 한 주기 프레임(@30fps) ≈ 0.93초 → 0.9 Hz
-RIPPLE_PERIOD_NEAR = 11     # 최근접 ≈ 0.37초 → 2.7 Hz
 
 
-def should_ripple(is_horn: bool, motion: Motion) -> bool:
-    """이 상태에서 '퍼지는 깜빡임'을 줄지. 경적은 상시(퍼짐 X), 접근 중일 때만 퍼진다."""
-    return (not is_horn) and (motion is Motion.APPROACHING)
 
 
-def ripple_brightness(
-    seg_index: int, center_index: int, radius: float,
-    frame: int, period: int = RIPPLE_PERIOD_FAR,
-) -> float:
-    """퍼지는 깜빡임의 세그먼트 밝기(0~1).
-
-    중앙에서 바깥으로 반경이 1→radius 로 커지며(퍼짐) 커질수록 흐려지다가 리셋 반복.
-    """
-    ph = (frame % period) / period                 # 0~1 위상
-    er = 1.0 + (radius - 1.0) * ph                  # 확장 반경
-    return segment_brightness(seg_index, center_index, er) * (1.0 - 0.55 * ph)
 
 
 # ── 음압(dB) → 시각량 ────────────────────────────────────────────────────
@@ -172,24 +113,8 @@ def spl_intensity(level_db: Optional[float], calibrated: bool) -> float:
     return max(0.0, min(1.0, (level_db - lo) / (hi - lo)))
 
 
-def spl_to_glow(t: float) -> float:
-    """강도 → 글로우 배수.
-
-    상한을 낮게 잡는다. 세게 주면 켜진 칸들이 한 덩어리로 뭉쳐서, 정작 방향
-    해상도가 음압에 반비례해 떨어지는 역설이 생긴다(v1 목업에서 확인).
-    """
-    return 0.5 + 1.1 * max(0.0, min(1.0, t))
 
 
-def ripple_period_for_spl(t: float) -> int:
-    """강도 → 퍼짐 한 주기 프레임 수. 소리가 클수록 짧다(=빨리 퍼진다).
-
-    ⚠ 하한 RIPPLE_PERIOD_NEAR(11프레임 ≈2.7Hz)는 광과민성 안전선이다. 초당 3회를
-    넘는 점멸은 발작을 유발할 수 있어(WCAG 2.3.1) 음압이 아무리 커도 내려가지
-    않는다. 기존 ripple_period_for_gauge 의 제약을 그대로 승계한다.
-    """
-    t = max(0.0, min(1.0, t))
-    return int(round(RIPPLE_PERIOD_FAR - t * (RIPPLE_PERIOD_FAR - RIPPLE_PERIOD_NEAR)))
 
 
 # ── 고정 레이아웃 ────────────────────────────────────────────────────────
@@ -201,15 +126,7 @@ class Layout:
     margin: int
     veh_xy: Tuple[int, int]
     state_xy: Tuple[int, int]
-    bar_x: int
-    bar_w: int
-    bar_cy: int
-    seg_h: int
-    seg_n: int
-    meter_y: int
-    meter_h: int
     db_right: int
-    db_y: int
     cap_cy: int
     # 폰트 크기도 여기서 나온다. 좌표만 모으고 폰트를 렌더러에 남기면 둘이 따로
     # 놀아 그리드가 어긋난다(차종 104px 자리에 40px 글자가 앉는 식).
@@ -229,26 +146,22 @@ class Layout:
     @classmethod
     def for_size(cls, w: int, h: int) -> "Layout":
         margin = round(w * 0.05625)
-        bar_x = round(w * 0.46875)
         # f_veh 는 h 로, 텍스트 칸 폭은 w 로 자란다 — 세로가 긴 화면에서 차종 글자가
-        # 바 영역을 침범한다(1280×720 의 "구급차", 800×480 의 모든 문구). 텍스트 칸
-        # (bar_x - margin)에 맞춰 상한을 건다. 나누는 수 4.0 은 최장 문구 "긴급차량"
-        # 의 폭÷폰트크기(≈3.48)에 L 라벨 gutter(margin//3) 여유를 더한 값이다.
-        # 1280×360 에선 528/4.0=132 > 104 라 기준 해상도 값은 그대로 104.
-        f_veh = max(24, min(round(h * 0.28889), round((bar_x - margin) / 4.0)))
+        # 레이더 영역을 침범한다(1280×720 의 "구급차", 800×480 의 모든 문구). 레이더
+        # 왼쪽 끝까지의 텍스트 칸에 맞춰 상한을 건다. 나누는 수 4.0 은 최장 문구
+        # "긴급차량"의 폭÷폰트크기(≈3.48)에 여백을 더한 값이다.
+        # 1280×360 에선 427/4.0≈107 > 104 라 기준 해상도 값은 그대로 104.
+        radar_cx = round(w * 0.54688)
+        radar_rx = round(w * 0.11719)
+        ring_gap = max(5, round(h * 0.03333))
+        ring_w = max(3, round(h * 0.01667))
+        radar_left = radar_cx - radar_rx - ring_w // 2 - (RINGS - 1) * ring_gap
+        f_veh = max(24, min(round(h * 0.28889), round((radar_left - margin) / 4.0)))
         return cls(
             margin=margin,
             veh_xy=(margin, round(h * 0.21667)),
             state_xy=(margin + round(w * 0.003), round(h * 0.55556)),
-            bar_x=bar_x,
-            bar_w=w - bar_x - margin,
-            bar_cy=round(h * 0.41667),
-            seg_h=round(h * 0.09444),
-            seg_n=15,
-            meter_y=round(h * 0.64444),
-            meter_h=max(4, round(h * 0.03333)),
             db_right=w - margin,
-            db_y=round(h * 0.74444),
             cap_cy=round(h * 0.89444),
             f_veh=f_veh,
             f_state=max(14, round(h * 0.12222)),
@@ -257,12 +170,12 @@ class Layout:
             f_cap=max(14, round(h * 0.10556)),
             # 레이더는 자막 줄(cap_cy) 위에서 끝나야 한다. 아래 값들은
             # radar_cy + radar_ry + ring_w/2 + (RINGS-1)*ring_gap < cap_cy 를 만족한다.
-            radar_cx=round(w * 0.54688),
+            radar_cx=radar_cx,
             radar_cy=round(h * 0.43889),
-            radar_rx=round(w * 0.11719),
+            radar_rx=radar_rx,
             radar_ry=round(h * 0.20000),
-            ring_gap=max(5, round(h * 0.03333)),
-            ring_w=max(3, round(h * 0.01667)),
+            ring_gap=ring_gap,
+            ring_w=ring_w,
         )
 
 
@@ -270,6 +183,11 @@ class Layout:
 # 가로 막대는 좌우 축만 표현할 수 있어 전/후를 담을 자리가 없었다(전방은 바를 숨기고
 # 후방은 중앙으로 밀어넣는 식). 네 방향 아크를 두면 각자 자리를 갖는다.
 RINGS = 5                       # 음압 척도. 안쪽에서 바깥으로 찬다.
+
+# ⚠ 이 화면에는 지금 점멸(blink/ripple)이 없다 — 아크는 각도만 바뀌고 밝기는 음압을
+# 따라 천천히 변한다. 나중에 맥동·점멸을 넣게 되면 **초당 3회를 넘기지 말 것**:
+# 그 이상은 광과민성 발작을 유발할 수 있다(WCAG 2.3.1). 30fps 기준 한 주기 11프레임
+# (≈2.7Hz)이 이전 구현이 쓰던 하한이었다.
 
 # 화면 기준 각도(pygame: 0=오른쪽, 반시계 증가). 위=전방.
 # 방향은 4분면으로 스냅하지 않는다 — DoA 는 연속 방위각을 주고, 그걸 버리면

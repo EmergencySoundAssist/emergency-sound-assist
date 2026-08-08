@@ -64,21 +64,6 @@ def _render(view, frames=1):
     return surf
 
 
-def test_meter_track_does_not_move_between_states():
-    """긴급 ↔ 평상시에 음압 트랙이 같은 자리·같은 길이 — 눈이 매번 같은 곳을 본다.
-
-    바(칸)는 글로우 헤일로가 상태마다 번지는 폭이 달라 픽셀로 비교할 수 없다.
-    트랙은 글로우가 없어 '움직이지 않음'을 그대로 확인할 수 있는 자리다.
-    """
-    lo = Layout.for_size(1280, 360)
-    row = lo.meter_y + lo.meter_h // 2
-
-    def occupied(view):
-        surf = _render(view)
-        return [x for x in range(lo.bar_x, 1280)
-                if surf.get_at((x, row))[:3] != (10, 10, 11)]
-
-    assert occupied(_view()) == occupied(_view(emergency=False)) != []
 
 
 
@@ -88,7 +73,7 @@ def test_uncalibrated_view_draws_no_number():
     lo = Layout.for_size(1280, 360)
     surf = _render(_view(level_text=None, spl_calibrated=False))
     band = [surf.get_at((x, y))[:3]
-            for y in range(lo.db_y, min(360, lo.db_y + 34))
+            for y in range(lo.radar_cy, min(360, lo.radar_cy + 34))
             for x in range(lo.db_right - 140, lo.db_right)]
     assert all(sum(c) < 60 for c in band), "미보정인데 숫자가 그려졌다"
 
@@ -96,7 +81,7 @@ def test_uncalibrated_view_draws_no_number():
 def test_rear_and_unknown_do_not_render_identically():
     """후방과 방향 미상이 같은 화면이면 HUD 가 모르는 방향을 단정하는 것이다.
 
-    direction_to_index 는 REAR·UNKNOWN 을 둘 다 중앙 칸(7)으로 보낸다 — 칸만으로는
+    이전 가로 바 구현은 REAR·UNKNOWN 을 둘 다 중앙 칸으로 보내서 픽셀이 같았다 —
     영원히 구분되지 않는다. DoA 하드웨어가 없으면 UNKNOWN 이 오히려 정상 상태라,
     문구가 방향을 말해 주지 않으면 소리를 못 듣는 운전자는 뒤를 볼 이유가 없는데도
     뒤를 본다. 픽셀이 달라야 한다.
@@ -105,7 +90,7 @@ def test_rear_and_unknown_do_not_render_identically():
     unknown = _render(_view(direction=Direction.UNKNOWN, direction_text="방향 미상"))
     lo = Layout.for_size(1280, 360)
     rows = range(lo.state_xy[1], min(360, lo.state_xy[1] + lo.f_state))
-    diff = [(x, y) for y in rows for x in range(lo.margin, lo.bar_x)
+    diff = [(x, y) for y in rows for x in range(lo.margin, (lo.radar_cx - lo.radar_rx))
             if rear.get_at((x, y))[:3] != unknown.get_at((x, y))[:3]]
     assert diff, "후방과 방향 미상이 픽셀까지 동일하다 — 모르는 방향을 단정하고 있다"
 
@@ -119,7 +104,7 @@ def test_uncalibrated_draws_no_number_even_if_level_text_is_set():
     lo = Layout.for_size(1280, 360)
     surf = _render(_view(level_text="97", spl_calibrated=False))
     band = [surf.get_at((x, y))[:3]
-            for y in range(lo.db_y, min(360, lo.db_y + 34))
+            for y in range(lo.radar_cy, min(360, lo.radar_cy + 34))
             for x in range(lo.db_right - 140, lo.db_right)]
     assert all(sum(c) < 60 for c in band), "미보정인데 숫자가 그려졌다"
 
@@ -165,7 +150,7 @@ def test_reference_resolution_is_unchanged_by_the_letterbox_path():
     lo = Layout.for_size(1280, 360)
     surf = _render_at(1280, 360, _view())
     rows = _content_rows(surf)
-    assert rows and min(rows) < lo.bar_cy < max(rows)
+    assert rows and min(rows) < lo.radar_cy < max(rows)
 
 
 # ---------------------------------------------------------------------------
