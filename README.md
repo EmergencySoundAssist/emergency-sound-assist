@@ -50,6 +50,11 @@ python main.py --mic --channels 6 --stt --stt-model small --hud   # + HUD 화면
 # ② 방향만 단독 (ReSpeaker 필요)
 python -m doa.multi_live --led        # 실시간 방향 + LED
 python -m pytest -q                   # 테스트
+
+# 차종 재학습용 데이터 수집 (젯슨에서 태깅 → 노트북에서 절단)
+systemctl stop emergency-hud                     # HUD 가 ReSpeaker 를 잡고 있으면 해제
+python tools/tag_siren.py --place 소방서앞        # 녹음하며 1구급/2경찰/3소방 입력
+python tools/cut_clips.py                        # 세션 → 5초 클립 + labels.csv
 ```
 실행 옵션 → [docs/doa/running.md](docs/doa/running.md) · Jetson 배포 → [docs/doa/jetson.md](docs/doa/jetson.md)
 
