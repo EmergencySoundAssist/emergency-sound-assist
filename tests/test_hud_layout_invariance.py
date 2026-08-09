@@ -83,7 +83,7 @@ def test_vehicle_text_starts_at_the_same_x_in_every_state():
     lefts = {}
     for name, view in STATES.items():
         surf = _render(view)
-        xs = [x for x in range(0, lo.bar_x)
+        xs = [x for x in range(0, (lo.radar_cx - lo.radar_rx))
               for y in range(lo.veh_xy[1], lo.veh_xy[1] + 90)
               if sum(surf.get_at((x, y))[:3]) > 120]
         if xs:
