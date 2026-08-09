@@ -2,7 +2,9 @@
 
 import numpy as np
 
-from tools.cut_clips import _overlaps, _read_tags, _runs, _windows, _read_wav, _write_wav
+from tools.cut_clips import (
+    _overlaps, _read_tags, _read_wav, _runs, _span_from_run, _windows, _write_wav,
+)
 from tools.tag_siren import _write_tags
 
 
@@ -13,10 +15,22 @@ def test_runs_finds_contiguous_true_spans():
     assert _runs([True, True, True]) == [(0, 3)]        # 끝까지 True 면 닫아준다
 
 
+def test_span_undoes_the_5s_window_smear():
+    """실측 기준. 10~20초 사이렌은 tick 10~23 에서 siren 판정을 낸다 → 다시 10~20 이 나와야.
+
+    번짐을 안 걷어내면 6~24 가 되어, 앞 소음과 25초에 오는 다음 차 사이렌까지 딸려온다.
+    """
+    assert _span_from_run(10, 24) == (10.0, 20.0)
+    assert _span_from_run(25, 39) == (25.0, 35.0)       # 두 번째 사이렌도 동일
+    lo, hi = _span_from_run(3, 5)                        # 창에 스치기만 한 run
+    assert hi <= lo                                      # 구간이 안 생긴다 → 클립 없음
+
+
 def test_windows_drops_the_tail_shorter_than_a_full_clip():
     assert _windows(0.0, 12.0) == [0.0, 5.0]           # 남는 2초는 버린다
     assert _windows(0.0, 10.0) == [0.0, 5.0]           # 경계는 포함
     assert _windows(3.0, 7.0) == []                     # 5초가 안 되면 클립 없음
+    assert _windows(10.0, 5.0) == []                    # 뒤집힌 구간도 안전
 
 
 def test_overlapping_clips_are_rejected():

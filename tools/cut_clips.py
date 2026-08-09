@@ -54,6 +54,22 @@ def _runs(flags: list[bool]) -> list[tuple[int, int]]:
     return out
 
 
+def _span_from_run(a: int, b: int) -> tuple[float, float]:
+    """사이렌 판정이 연속된 tick run [a, b) → 실제 사이렌이 울린 구간(초).
+
+    tick i 의 판정은 오디오 [(i+1)-WIN, i+1) 초를 본 결과다. 5초 창이라 사이렌이 1초만
+    걸쳐도 siren 이 뜬다(검출기는 빨리 경보하는 게 목적이라 이게 맞는 동작이다).
+    그래서 판정이 켜진 시각을 그대로 쓰면 구간이 앞뒤로 최대 4초씩 번지고, 앞의 소음이나
+    **다음 차의 사이렌**까지 이 라벨로 딸려온다.
+
+      - 첫 siren tick a  → 사이렌이 창에 막 들어온 순간 → 시작 ≈ a
+      - 마지막 siren tick b-1 → 사이렌이 창 앞쪽에만 남은 순간 → 끝 ≈ b - (WIN-TICK)
+
+    확신도로는 못 가른다(실측: 사이렌 1/5초 클립 conf 0.893 > 순수 사이렌 0.850).
+    """
+    return a * TICK, b * TICK - (WIN - TICK)
+
+
 def _windows(start_s: float, end_s: float, win: float = WIN) -> list[float]:
     """[start, end) 를 win 초씩 겹치지 않게 채운 시작시각들. 남는 꼬리는 버린다."""
     out: list[float] = []
@@ -108,8 +124,6 @@ def _siren_spans(audio: np.ndarray) -> list[tuple[float, float]]:
     """창 오디오에서 사이렌 구간(창 로컬 초)을 찾는다.
 
     analyze 는 5초 롤링 버퍼를 **전역 싱글턴에 들고** 있으므로 창마다 reset() 이 필수다.
-    tick i 가 사이렌이면 그 판정의 5초 윈도우 끝이 (i+1)초 지점이라, 구간 앞쪽을 그만큼
-    되돌려 준다.
     """
     from classifier.inference import analyze, reset
     from core.types import SoundClass
@@ -120,11 +134,7 @@ def _siren_spans(audio: np.ndarray) -> list[tuple[float, float]]:
     for start in range(0, len(audio) - n + 1, n):
         res = analyze(AudioChunk(samples=audio[start:start + n], sample_rate=SAMPLE_RATE))
         flags.append(res is not None and res["label"] is SoundClass.SIREN)
-
-    spans = []
-    for a, b in _runs(flags):
-        spans.append((max(0.0, (a + 1) * TICK - WIN), b * TICK))
-    return spans
+    return [_span_from_run(a, b) for a, b in _runs(flags)]
 
 
 def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> list[dict]:
@@ -142,11 +152,12 @@ def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> list
         w1 = min(duration, t_tag + post)
         if w1 - w0 < WIN:
             continue
+
         window = audio[int(w0 * SAMPLE_RATE):int(w1 * SAMPLE_RATE)]
         for lo, hi in _siren_spans(window):
-            for local in _windows(lo, min(hi, w1 - w0)):
+            for local in _windows(lo, hi):
                 t0 = w0 + local
-                if _overlaps(t0, taken):
+                if _overlaps(t0, taken):    # 앞 태그가 이미 가져간 구간
                     continue
                 taken.append((t0, t0 + WIN))
                 name = f"{session.name}_{len(rows):03d}.wav"
