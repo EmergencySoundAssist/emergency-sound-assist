@@ -3,7 +3,7 @@
 import numpy as np
 
 from tools.cut_clips import (
-    _overlaps, _read_tags, _read_wav, _runs, _span_from_run, _windows, _write_wav,
+    _merge, _overlaps, _read_tags, _read_wav, _runs, _span_from_run, _windows, _write_wav,
 )
 from tools.tag_siren import _write_tags
 
@@ -13,6 +13,27 @@ def test_runs_finds_contiguous_true_spans():
     assert _runs([False, False]) == []
     assert _runs([True, True, False, True]) == [(0, 2), (3, 4)]
     assert _runs([True, True, True]) == [(0, 3)]        # 끝까지 True 면 닫아준다
+
+
+def test_merge_closes_short_judgement_dropouts():
+    """실측 세션 기준. 9~16s siren, 17s normal, 18s siren 은 8초짜리 사이렌 하나였다.
+
+    쪼갠 채로 두면 (8,16)→4초, (17,18)→음수가 되어 클립이 하나도 안 나온다.
+    """
+    assert _merge([(8, 16), (17, 18)], 23) == [(8, 18)]
+    assert _span_from_run(*_merge([(8, 16), (17, 18)], 23)[0]) == (8.0, 14.0)
+    assert _merge([], 0) == []
+
+
+def test_merge_never_swallows_the_next_vehicles_siren():
+    """합성 2대 세션 기준. 10~20s 와 25~35s 는 판정상 간격이 튄 자국과 똑같이 1 tick 이다.
+
+    길이로 갈라야 한다 — 붙여버리면 소방차 사이렌이 구급차 라벨로 저장된다.
+    """
+    assert _merge([(10, 24), (25, 39)], 40) == [(10, 24), (25, 39)]
+    # 창 끝에서 잘려 짧아 보이는 run 도 흡수하지 않는다 (길이를 신뢰할 수 없다)
+    assert _merge([(10, 24), (25, 28)], 28) == [(10, 24), (25, 28)]
+    assert _merge([(0, 3), (10, 12)], 30) == [(0, 3), (10, 12)]     # 먼 구간은 안 잇는다
 
 
 def test_span_undoes_the_5s_window_smear():

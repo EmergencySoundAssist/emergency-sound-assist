@@ -34,6 +34,7 @@ from core.types import SAMPLE_RATE, AudioChunk
 
 WIN = 5.0          # 클립 길이 = 차종 모델 입력 창(5초)과 동일
 TICK = 1.0         # analyze 한 번이 먹는 길이
+GAP = 2            # 이 tick 이하의 판정 구멍은 메운다 (실제 녹음은 경계에서 1~2초 튄다)
 
 
 def _runs(flags: list[bool]) -> list[tuple[int, int]]:
@@ -51,6 +52,30 @@ def _runs(flags: list[bool]) -> list[tuple[int, int]]:
             start = None
     if start is not None:
         out.append((start, len(flags)))
+    return out
+
+
+def _merge(runs: list[tuple[int, int]], n_flags: int, gap: int = GAP) -> list[tuple[int, int]]:
+    """판정이 잠깐 튄 자국을 앞 구간에 흡수한다. 다음 차의 사이렌은 절대 흡수하지 않는다.
+
+    실제 녹음은 사이렌이 이어지는 중에도 판정이 1~2초 튄다(실측: 9~16초 siren, 17초
+    normal, 18초 siren). 안 메우면 8초 사이렌이 8+1 로 쪼개지고, 번짐 보정 4초를 뺀 뒤엔
+    둘 다 5초에 못 미쳐 클립이 하나도 안 나온다.
+
+    다만 **간격으로는 못 가른다** — 번짐이 앞 run 의 끝을 4초 늘려놔서, 튄 자국이든 5초
+    떨어진 다른 차든 판정상 간격이 똑같이 1 tick 이다. 대신 길이로 갈린다: 튄 자국은
+    1~2 tick 이고 독립된 사이렌은 WIN 이상 이어진다. 잘못 붙이면 다음 차의 사이렌이 이
+    라벨로 딸려오므로, 애매하면 안 붙이는 쪽으로 기운다.
+    """
+    min_own = int(WIN / TICK)
+    out: list[tuple[int, int]] = []
+    for a, b in runs:
+        # b == n_flags 면 창 끝에서 잘린 run 이라 실제 길이를 알 수 없다 → 흡수하지 않는다.
+        stray = (b - a) < min_own and b < n_flags
+        if out and stray and a - out[-1][1] <= gap:
+            out[-1] = (out[-1][0], b)
+        else:
+            out.append((a, b))
     return out
 
 
@@ -134,11 +159,15 @@ def _siren_spans(audio: np.ndarray) -> list[tuple[float, float]]:
     for start in range(0, len(audio) - n + 1, n):
         res = analyze(AudioChunk(samples=audio[start:start + n], sample_rate=SAMPLE_RATE))
         flags.append(res is not None and res["label"] is SoundClass.SIREN)
-    return [_span_from_run(a, b) for a, b in _runs(flags)]
+    return [_span_from_run(a, b) for a, b in _merge(_runs(flags), len(flags))]
 
 
-def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> list[dict]:
-    """세션 하나 → 클립 저장 + labels.csv 행들."""
+def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> tuple[list[dict], str]:
+    """세션 하나 → (labels.csv 행들, 한 줄 진단).
+
+    진단을 같이 내는 이유: 클립 0개일 때 원인이 "사이렌이 검출되지 않았다"인지 "검출은
+    됐는데 5초를 못 채웠다"인지 도구가 말해주지 않으면, 매번 세션 wav 를 따로 뜯어봐야 한다.
+    """
     audio = _read_wav(session / "audio.wav")
     tags = _read_tags(session / "tags.csv")
     duration = len(audio) / SAMPLE_RATE
@@ -147,6 +176,7 @@ def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> list
 
     rows: list[dict] = []
     taken: list[tuple[float, float]] = []
+    n_spans = n_short = 0
     for t_tag, label in tags:
         w0 = max(0.0, t_tag - pre)
         w1 = min(duration, t_tag + post)
@@ -155,6 +185,9 @@ def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> list
 
         window = audio[int(w0 * SAMPLE_RATE):int(w1 * SAMPLE_RATE)]
         for lo, hi in _siren_spans(window):
+            n_spans += 1
+            if hi - lo < WIN:
+                n_short += 1
             for local in _windows(lo, hi):
                 t0 = w0 + local
                 if _overlaps(t0, taken):    # 앞 태그가 이미 가져간 구간
@@ -165,7 +198,14 @@ def _cut_session(session: Path, out_root: Path, pre: float, post: float) -> list
                            audio[int(t0 * SAMPLE_RATE):int((t0 + WIN) * SAMPLE_RATE)])
                 rows.append({"clip": f"{label}/{name}", "label": label,
                              "session_id": session.name, "place": place, "t_start_sec": t0})
-    return rows
+
+    if n_spans == 0:
+        diag = "사이렌 구간 없음 — 검출기가 이 소리를 사이렌으로 보지 않았다"
+    elif n_short == n_spans and not rows:
+        diag = f"사이렌 구간 {n_spans}개가 전부 {WIN:.0f}초 미만 — 더 길게 울릴 때 태그할 것"
+    else:
+        diag = f"사이렌 구간 {n_spans}개" + (f" (그중 {n_short}개는 짧아 버림)" if n_short else "")
+    return rows, diag
 
 
 def main(argv=None) -> int:
@@ -185,9 +225,9 @@ def main(argv=None) -> int:
 
     rows: list[dict] = []
     for s in sessions:
-        got = _cut_session(s, out_root, a.pre, a.post)
+        got, diag = _cut_session(s, out_root, a.pre, a.post)
         rows.extend(got)
-        print(f"[cut] {s.name}: 클립 {len(got)}개")
+        print(f"[cut] {s.name}: 클립 {len(got)}개 — {diag}")
 
     out_root.mkdir(parents=True, exist_ok=True)
     with (out_root / "labels.csv").open("w", encoding="utf-8") as f:
