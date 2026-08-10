@@ -70,13 +70,17 @@ class Pipeline:
         # 창은 약 1.5초 — 청크가 1초이므로 3틱. HUD 가 보는 motion 이 이 결과다.
         self._fusion = ConditionalMotionFusion(smooth_size=3)
         self._active = False
+        self.last_raw: Optional[ClassResult] = None   # 직전 틱의 디바운스 전 판정
         self._stt = stt_worker           # 평상시 음성→자막 (백그라운드, 없으면 STT 생략)
         self._caption = CaptionGate(hold_seconds)   # 자막 3초 유지 + 표시 중 입력 차단
         self._now = clock if clock is not None else time.monotonic
 
     def process(self, chunk: AudioChunk) -> FusedResult:
         mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
-        cls = self._debounce(classify(mono_chunk))
+        # 디바운스 전 원판정도 남긴다 — 수집기(collect)는 벽시계 잔향이 섞이지 않은
+        # raw 를 써야 오디오 시간축과 일관된다(--wav 재수집은 실시간보다 빠르다).
+        self.last_raw = classify(mono_chunk)
+        cls = self._debounce(self.last_raw)
         speech: Optional[SpeechResult] = None
 
         if cls.is_emergency:                     # ── 긴급: 경고 집중, STT 멈춤 ──

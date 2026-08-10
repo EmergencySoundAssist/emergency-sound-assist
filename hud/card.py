@@ -247,6 +247,25 @@ def arc_bounds(center_deg: float, half: float = ARC_HALF_DEG):
     return center_deg - half, center_deg + half
 
 
+# ── 수집 모드 오버레이 (--collect) — 차종 버튼 띠 ──────────────────────────
+# 순서는 tools/tag_siren.py 의 키 배열(1 구급 · 2 경찰 · 3 소방 · u 모름)과 같다.
+COLLECT_ORDER = ("ambulance", "police", "fire", "unknown")
+
+
+def collect_button_rects(w: int, h: int) -> List[Tuple[int, int, int, int]]:
+    """수집 모드 차종 버튼 4개의 (x, y, w, h). 화면 하단 한 줄, 터치 가능한 크기.
+
+    좌표 계산을 렌더러 밖에 두는 이유: display 가 터치/클릭 판정에 같은 사각형을
+    써야 한다. 렌더러가 그린 곳과 손가락이 닿는 곳이 한 함수에서 나오게 한다.
+    """
+    margin = round(w * 0.05625)                       # Layout.margin 과 동일 비율
+    bh = max(34, round(h * 0.16))
+    gap = max(6, round(w * 0.008))
+    bw = (w - 2 * margin - 3 * gap) // 4
+    y = h - bh - max(4, round(h * 0.02))
+    return [(margin + i * (bw + gap), y, bw, bh) for i in range(4)]
+
+
 def angle_lerp(prev: float, target: float, alpha: float) -> float:
     """360° 원 위에서 최단 경로 선형 보간.
 

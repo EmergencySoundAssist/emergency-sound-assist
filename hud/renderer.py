@@ -43,6 +43,14 @@ def vehicle_color(sound_text: str) -> tuple:
     return VEH_OTHER
 
 
+# 수집 모드(--collect) 버튼 — 순서는 card.COLLECT_ORDER, 키는 tag_siren 과 동일
+_COLLECT_BTNS = {
+    "ambulance": ("구급차", "1", VEH_AMBULANCE),
+    "police": ("경찰차", "2", VEH_POLICE),
+    "fire": ("소방차", "3", VEH_FIRE),
+    "unknown": ("차종모름", "U", VEH_OTHER),
+}
+
 # LED 스트립 디자인 확정값 (디자인 스튜디오에서 튜닝)
 # 레이더 중앙 차 — 위에서 본 형태. 지붕이 밝고 유리가 어두워야 입체로 읽힌다.
 CAR_BODY = (50, 54, 66)     # 차체(보닛·트렁크)
@@ -106,6 +114,7 @@ class Renderer:
         self._font_path = config.font_path
         self._frame = 0
         self._size = None                       # 마지막으로 레이아웃을 잡은 박스 크기
+        self.collect_buttons = []               # 수집 모드 버튼 (surface 좌표, 터치 판정용)
         self._prev_arc_deg = None               # 아크 스무딩용 이전 프레임 각도
         # 설계 비율(기본 1280:360 ≈ 3.56:1). 윈드실드 띠를 전제로 잡은 값이라,
         # 화면이 더 정사각형에 가까워도 이 비율을 유지해야 배치가 무너지지 않는다.
@@ -145,7 +154,8 @@ class Renderer:
         self._f_unit = load_font(lo.f_unit, self._font_path)    # dB 단위 · L/R 라벨
         self._f_cap = load_font(lo.f_cap, self._font_path)      # 자막
 
-    def draw(self, surface, view) -> None:
+    def draw(self, surface, view, collect=None) -> None:
+        """collect: SirenCollector.status() dict — 주면 하단에 수집 오버레이를 얹는다."""
         surface.fill(BG)                # 레터박스 여백도 같은 배경으로 덮는다
         box = self._design_box(*surface.get_size())
         if box.size != self._size:      # 크기가 바뀐 프레임에만 재계산(폰트 로드가 비싸다)
@@ -156,11 +166,60 @@ class Renderer:
         w, h = box.size
         if view is None:
             self._center(target, "연결됨 · 대기 중", self._f_mid, MUTED, w // 2, h // 2)
-            return
-        if view.emergency:
+        elif view.emergency:
             self._draw_emergency(target, view, w, h)
         else:
             self._draw_normal(target, view, w, h)
+        # 수집 오버레이는 상태와 무관하게 마지막에 — 자막 위에 얹혀도 버튼이 이긴다.
+        # collect_buttons 는 **surface 좌표** 사각형 — display 가 터치 판정에 그대로 쓴다.
+        if collect is not None:
+            self.collect_buttons = [
+                (rect.move(box.x, box.y), key)
+                for rect, key in self._draw_collect(target, collect, w, h)
+            ]
+        else:
+            self.collect_buttons = []
+
+    def _draw_collect(self, surface, st, w, h):
+        """수집 모드 하단 띠: 차종 버튼 4개 + 녹음 상태 한 줄. 점멸 없음(광과민 규칙).
+
+        녹음 중이고 그 클립에 라벨이 붙었으면 해당 버튼만 채워진다 — 조수석이
+        '내 입력이 먹었는지'를 흘긋 봐서 알 수 있어야 한다.
+        """
+        rects = hud_card.collect_button_rects(w, h)
+        recording = st.get("recording")
+        out = []
+        for (x, y, bw, bh), key in zip(rects, hud_card.COLLECT_ORDER):
+            ko, hint, color = _COLLECT_BTNS[key]
+            rect = pygame.Rect(x, y, bw, bh)
+            active = recording is not None and st.get("label") == key
+            if active:
+                pygame.draw.rect(surface, color, rect, border_radius=10)
+                tcol = BG
+            else:
+                pygame.draw.rect(surface, DIM, rect, border_radius=10)
+                pygame.draw.rect(surface, color, rect, 2, border_radius=10)
+                tcol = FG
+            text = self._f_cap.render(f"{ko} {hint}", True, tcol)
+            if text.get_width() > bw - 8:               # 작은 창(개발용)에선 작은 폰트로
+                text = self._f_unit.render(f"{ko} {hint}", True, tcol)
+            surface.blit(text, text.get_rect(center=rect.center))
+            out.append((rect, key))
+
+        line_y = rects[0][1] - self._f_unit.get_height() - 4
+        if st.get("closed"):
+            msg, col = f"세션 종료 — 클립 {st.get('clips', 0)}개 저장됨", MUTED
+        elif recording:
+            mode = "자동" if recording == "auto" else "수동"
+            msg, col = f"● {st.get('elapsed', 0.0):.0f}s {mode} 녹음", VEH_FIRE
+        else:
+            msg, col = f"수집 대기 · 클립 {st.get('clips', 0)}", MUTED
+        surface.blit(self._f_unit.render(msg, True, col), (rects[0][0], line_y))
+        fb = st.get("feedback")
+        if fb:
+            s = self._f_unit.render(fb, True, FG)
+            surface.blit(s, (rects[-1][0] + rects[-1][2] - s.get_width(), line_y))
+        return out
 
     def _draw_emergency(self, surface, view, w, h):
         """3열: 왼쪽 무엇(차종·상태) / 가운데 어디(레이더) / 오른쪽 얼마나(dB)."""
