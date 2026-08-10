@@ -9,7 +9,6 @@ import pytest
 
 pygame = pytest.importorskip("pygame")
 
-from core.types import SirenSubtype
 from hud.config import HudConfig
 from hud.display import _COLLECT_KEYS, HudDisplay
 from hud.renderer import Renderer
@@ -40,20 +39,21 @@ def test_overlay_draws_in_all_states_and_exposes_buttons():
     surf = pygame.Surface((1280, 360))
     r = Renderer(HudConfig(width=1280, height=360))
     r.draw(surf, None, collect=_FakeCollector().status())           # 대기 화면에도 버튼
-    assert len(r.collect_buttons) == 4
+    assert len(r.collect_buttons) == 5
     r.draw(surf, None, collect=_FakeCollector("auto", "fire").status())
-    assert len(r.collect_buttons) == 4
+    assert len(r.collect_buttons) == 5
     r.draw(surf, None)                                              # 수집 없으면 버튼 없음
     assert r.collect_buttons == []
     pygame.quit()
 
 
 def test_key_mapping_matches_tag_siren_layout():
-    assert _COLLECT_KEYS[pygame.K_1] is SirenSubtype.AMBULANCE
-    assert _COLLECT_KEYS[pygame.K_2] is SirenSubtype.POLICE
-    assert _COLLECT_KEYS[pygame.K_3] is SirenSubtype.FIRE
-    assert _COLLECT_KEYS[pygame.K_u] is SirenSubtype.UNKNOWN
-    assert _COLLECT_KEYS[pygame.K_KP1] is SirenSubtype.AMBULANCE    # 키패드도 동작
+    assert _COLLECT_KEYS[pygame.K_1] == "ambulance"
+    assert _COLLECT_KEYS[pygame.K_2] == "police"
+    assert _COLLECT_KEYS[pygame.K_3] == "fire"
+    assert _COLLECT_KEYS[pygame.K_u] == "unknown"
+    assert _COLLECT_KEYS[pygame.K_KP1] == "ambulance"   # 키패드도 동작
+    assert _COLLECT_KEYS[pygame.K_n] == "not_siren"     # 오검출 확인
 
 
 def _display_with_fake(reflect=False):
@@ -68,11 +68,10 @@ def _display_with_fake(reflect=False):
 
 def test_keydown_routes_to_collector():
     d, fake = _display_with_fake()
-    for key, expected in ((pygame.K_1, SirenSubtype.AMBULANCE),
-                          (pygame.K_u, SirenSubtype.UNKNOWN)):
+    for key in (pygame.K_1, pygame.K_u, pygame.K_n):
         d._collect_input(pygame.event.Event(pygame.KEYDOWN, key=key))
     d._collect_input(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z))
-    assert fake.labels == [SirenSubtype.AMBULANCE, SirenSubtype.UNKNOWN]
+    assert fake.labels == ["ambulance", "unknown", "not_siren"]
     assert fake.cancels == 1
     pygame.quit()
 
@@ -83,10 +82,10 @@ def test_click_on_button_labels_that_vehicle():
     assert key == "fire"
     d._collect_input(pygame.event.Event(
         pygame.MOUSEBUTTONDOWN, button=1, pos=rect.center))
-    assert fake.labels == [SirenSubtype.FIRE]
+    assert fake.labels == ["fire"]
     # 버튼 밖(좌상단 구석)은 무시
     d._collect_input(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(1, 1)))
-    assert fake.labels == [SirenSubtype.FIRE]
+    assert fake.labels == ["fire"]
     pygame.quit()
 
 
@@ -108,5 +107,5 @@ def test_click_hits_same_button_in_reflect_mode():
     h = d._screen.get_size()[1]
     flipped = (rect.centerx, h - 1 - rect.centery)  # 화면(뒤집힌)에서 보이는 위치
     d._collect_input(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=flipped))
-    assert fake.labels == [SirenSubtype.AMBULANCE]
+    assert fake.labels == ["ambulance"]
     pygame.quit()

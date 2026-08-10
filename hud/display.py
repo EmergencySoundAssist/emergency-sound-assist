@@ -12,22 +12,21 @@ from dataclasses import replace
 
 import pygame
 
-from core.types import SirenSubtype
 from hud.renderer import Renderer
 from hud.viewmodel import HudView
 
-# 수집 모드 키 → 차종. tools/tag_siren.py 의 배열(1/2/3/u)과 동일 + 키패드.
+# 수집 모드 키 → 라벨. 1/2/3/u 는 tools/tag_siren.py 의 배열과 동일(+키패드),
+# n 은 오검출 확인(사이렌 아님 — hard negative).
 _COLLECT_KEYS = {}
-for _keys, _sub in (
-    (("K_1", "K_KP1"), SirenSubtype.AMBULANCE),
-    (("K_2", "K_KP2"), SirenSubtype.POLICE),
-    (("K_3", "K_KP3"), SirenSubtype.FIRE),
-    (("K_u", "K_0", "K_KP0"), SirenSubtype.UNKNOWN),
+for _keys, _label in (
+    (("K_1", "K_KP1"), "ambulance"),
+    (("K_2", "K_KP2"), "police"),
+    (("K_3", "K_KP3"), "fire"),
+    (("K_u", "K_0", "K_KP0"), "unknown"),
+    (("K_n",), "not_siren"),
 ):
     for _k in _keys:
-        _COLLECT_KEYS[getattr(pygame, _k)] = _sub
-
-_COLLECT_SUBTYPE = {s.value: s for s in SirenSubtype}
+        _COLLECT_KEYS[getattr(pygame, _k)] = _label
 
 
 class HudDisplay:
@@ -88,9 +87,9 @@ class HudDisplay:
         렌더러가 기억하는 버튼 사각형(뒤집기 전 좌표)과 맞춘다.
         """
         if event.type == pygame.KEYDOWN:
-            sub = _COLLECT_KEYS.get(event.key)
-            if sub is not None:
-                self._collector.on_label(sub)
+            label = _COLLECT_KEYS.get(event.key)
+            if label is not None:
+                self._collector.on_label(label)
             elif event.key == pygame.K_z:
                 self._collector.on_cancel()
             return
@@ -110,7 +109,7 @@ class HudDisplay:
             pos = (pos[0], self._screen.get_size()[1] - 1 - pos[1])
         for rect, key in self._renderer.collect_buttons:
             if rect.collidepoint(pos):
-                self._collector.on_label(_COLLECT_SUBTYPE[key])
+                self._collector.on_label(key)
                 return
 
     def _tick(self) -> None:

@@ -247,23 +247,26 @@ def arc_bounds(center_deg: float, half: float = ARC_HALF_DEG):
     return center_deg - half, center_deg + half
 
 
-# ── 수집 모드 오버레이 (--collect) — 차종 버튼 띠 ──────────────────────────
-# 순서는 tools/tag_siren.py 의 키 배열(1 구급 · 2 경찰 · 3 소방 · u 모름)과 같다.
-COLLECT_ORDER = ("ambulance", "police", "fire", "unknown")
+# ── 수집 모드 오버레이 (--collect) — 라벨 버튼 띠 ──────────────────────────
+# 앞 4개는 tools/tag_siren.py 의 키 배열(1 구급 · 2 경찰 · 3 소방 · u 모름)과 같고,
+# not_siren(N)은 오검출 확인용 — 검출이 울렸는데 사이렌이 아니었을 때 누른다
+# (검출기 hard-negative 수집 + 미라벨 클립이 다음 라벨을 흡수하는 것 방지).
+COLLECT_ORDER = ("ambulance", "police", "fire", "unknown", "not_siren")
 
 
 def collect_button_rects(w: int, h: int) -> List[Tuple[int, int, int, int]]:
-    """수집 모드 차종 버튼 4개의 (x, y, w, h). 화면 하단 한 줄, 터치 가능한 크기.
+    """수집 모드 라벨 버튼들의 (x, y, w, h). 화면 하단 한 줄, 터치 가능한 크기.
 
     좌표 계산을 렌더러 밖에 두는 이유: display 가 터치/클릭 판정에 같은 사각형을
     써야 한다. 렌더러가 그린 곳과 손가락이 닿는 곳이 한 함수에서 나오게 한다.
     """
+    n = len(COLLECT_ORDER)
     margin = round(w * 0.05625)                       # Layout.margin 과 동일 비율
     bh = max(34, round(h * 0.16))
     gap = max(6, round(w * 0.008))
-    bw = (w - 2 * margin - 3 * gap) // 4
+    bw = (w - 2 * margin - (n - 1) * gap) // n
     y = h - bh - max(4, round(h * 0.02))
-    return [(margin + i * (bw + gap), y, bw, bh) for i in range(4)]
+    return [(margin + i * (bw + gap), y, bw, bh) for i in range(n)]
 
 
 def angle_lerp(prev: float, target: float, alpha: float) -> float:

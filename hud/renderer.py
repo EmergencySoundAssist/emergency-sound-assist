@@ -49,6 +49,7 @@ _COLLECT_BTNS = {
     "police": ("경찰차", "2", VEH_POLICE),
     "fire": ("소방차", "3", VEH_FIRE),
     "unknown": ("차종모름", "U", VEH_OTHER),
+    "not_siren": ("사이렌아님", "N", MUTED),      # 오검출 확인 — hard negative
 }
 
 # LED 스트립 디자인 확정값 (디자인 스튜디오에서 튜닝)

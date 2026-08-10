@@ -46,13 +46,15 @@ import numpy as np
 from core.types import AudioChunk, ClassResult, SirenSubtype, SoundClass
 
 LABEL_UNLABELED = "unlabeled"
+LABEL_NOT_SIREN = "not_siren"     # 오검출 확인 — 검출은 울렸는데 사이렌이 아니었음
 
 # HUD 피드백 문구용 (수집기는 화면에 낼 문구까지 만든다 — HUD 는 그대로 그린다)
 _KO = {
-    SirenSubtype.AMBULANCE: "구급차",
-    SirenSubtype.POLICE: "경찰차",
-    SirenSubtype.FIRE: "소방차",
-    SirenSubtype.UNKNOWN: "차종모름",
+    SirenSubtype.AMBULANCE.value: "구급차",
+    SirenSubtype.POLICE.value: "경찰차",
+    SirenSubtype.FIRE.value: "소방차",
+    SirenSubtype.UNKNOWN.value: "차종모름",
+    LABEL_NOT_SIREN: "사이렌아님",
 }
 
 
@@ -167,8 +169,8 @@ class SirenCollector:
 
     # ── HUD 스레드 ──────────────────────────────────────────────────────
 
-    def on_label(self, subtype: SirenSubtype) -> None:
-        """차종 버튼. 라벨을 가장 오래 기다린 쪽부터: 직전 미라벨 클립(grace) →
+    def on_label(self, label: "str | SirenSubtype") -> None:
+        """라벨 버튼. 라벨을 가장 오래 기다린 쪽부터: 직전 미라벨 클립(grace) →
         녹음 중 클립 → (둘 다 없으면) 수동 녹음 시작.
 
         순서가 이래야 하는 이유: 라벨은 사이렌보다 ~10초 늦는다. 연속 출동에서
@@ -176,25 +178,36 @@ class SirenCollector:
         열린 클립을 먼저 채우면 앞차 라벨이 뒷차에 붙는다(체계적 오라벨).
         버튼이 차량 순서대로 눌린다는 약속이므로, 차를 못 봤어도 u 를 눌러
         순서를 지켜야 한다. 잘못 붙인 라벨은 z 로 취소 후 다시 누른다.
+
+        not_siren(오검출 확인)만 예외로 수동 녹음을 **열지 않는다** — '사이렌이
+        아니다'는 소리는 새로 녹음할 대상이 없고, 이 버튼의 일은 오검출 클립에
+        도장을 찍어 라벨 대기 줄에서 빼는 것뿐이다.
         """
-        ko = _KO[subtype]
+        if isinstance(label, SirenSubtype):
+            label = label.value
+        ko = _KO.get(label)
+        if ko is None:
+            return
         with self._lock:
             if self._closed:
                 self._say("세션 종료됨 — 입력은 기록되지 않는다")
                 return
             row = self._graced_row()
             if row is not None and row["label"] == LABEL_UNLABELED:
-                row["label"] = subtype.value
+                row["label"] = label
                 self._write_csv()
                 self._say(f"라벨 ✓ {ko} (직전 클립)")
                 return
             if self._clip is not None:
                 c = self._clip
-                c["presses"].append((self._clip_sec(c), subtype.value))
-                c["label"] = subtype.value
+                c["presses"].append((self._clip_sec(c), label))
+                c["label"] = label
                 self._say(f"라벨 ✓ {ko} (녹음 중 클립)")
                 return
-            self._open_clip(trigger="manual", label=subtype.value, cls=None)
+            if label == LABEL_NOT_SIREN:
+                self._say("사이렌아님: 대상 클립 없음")
+                return
+            self._open_clip(trigger="manual", label=label, cls=None)
             self._say(f"수동 녹음 ● {ko} — 미검출 표본")
 
     def on_cancel(self) -> None:

@@ -146,6 +146,27 @@ def test_label_after_grace_opens_manual_clip(tmp_path):
     assert _rows(c)[0]["label"] == LABEL_UNLABELED      # 직전 클립은 그대로
 
 
+def test_not_siren_stamps_false_positive_and_clears_the_queue(tmp_path):
+    """오검출 클립에 사이렌아님 도장 → 이후 라벨이 그 클립에 흡수되지 않는다."""
+    c = _mk(tmp_path)
+    _feed(c, 2, _siren)                 # 오검출(FP) 자동 클립
+    _feed(c, 2, _noise)                 # unlabeled 로 닫힘
+    c.on_label("not_siren")
+    assert _rows(c)[0]["label"] == "not_siren"
+    c.on_label(SirenSubtype.FIRE)       # 다음 라벨은 FP 클립을 건너뛴다
+    assert _rows(c)[0]["label"] == "not_siren"
+    assert c.status()["recording"] == "manual"      # → 미검출 수동 녹음으로
+
+
+def test_not_siren_never_opens_a_manual_clip(tmp_path):
+    """'사이렌이 아니다'는 새로 녹음할 소리가 없다 — 대상 없으면 도장만 거부."""
+    c = _mk(tmp_path)
+    _feed(c, 3, _noise)
+    c.on_label("not_siren")
+    assert c.status()["recording"] is None
+    assert _rows(c) == []
+
+
 def test_label_never_overwrites_a_labeled_clip(tmp_path):
     """grace 안이라도 라벨이 이미 있으면 새 키는 수동 녹음이다 — 데이터를 덮지 않는다."""
     c = _mk(tmp_path)
@@ -304,7 +325,7 @@ def test_collect_button_rects_fit_and_do_not_overlap():
 
     for w, h in ((1280, 360), (800, 480), (320, 180)):
         rects = collect_button_rects(w, h)
-        assert len(rects) == 4
+        assert len(rects) == 5
         for x, y, bw, bh in rects:
             assert 0 <= x and x + bw <= w
             assert 0 <= y and y + bh <= h

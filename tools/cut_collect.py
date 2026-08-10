@@ -43,6 +43,7 @@ from core.types import SAMPLE_RATE
 from tools.cut_clips import WIN, _read_wav, _siren_spans, _windows, _write_wav
 
 UNLABELED = "unlabeled"
+NOT_SIREN = "not_siren"     # 오검출 확인 클립 — 검출기 hard-negative 로만 자른다
 FIXED_CAP = 15.0        # fixed 폴백이 버튼 언저리에서 가져갈 최대 초
 
 
@@ -121,7 +122,9 @@ def _cut_session(session: Path, out_root: Path, lead: float) -> tuple[list[dict]
                 for t0 in _windows(lo, hi)]
         # 수동 = 검출기가 놓친 사이렌. 검출기 경로로 창이 0개면(구간 없음·부분
         # 검출로 5초 미만 모두 포함) 버튼 시점 기준 고정 창으로 폴백한다.
-        if not wins and ev["trigger"] == "manual":
+        # not_siren 은 예외 — 검출기가 실제로 속은 구간만 negative 로 가치가 있고,
+        # 폴백까지 하면 그냥 도로소음이 not_siren/ 을 채운다.
+        if not wins and ev["trigger"] == "manual" and ev["label"] != NOT_SIREN:
             lo, hi = _fixed_span(duration, float(ev["pre_roll_sec"]), lead)
             wins = [(t0, ev["label"], "fixed") for t0 in _windows(lo, hi)]
         if not wins:
