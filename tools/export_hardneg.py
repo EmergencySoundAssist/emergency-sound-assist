@@ -48,7 +48,7 @@ from core.types import SAMPLE_RATE
 from tools.cut_clips import _read_wav
 
 SIREN_LABELS = ("ambulance", "police", "fire", "unknown")
-NOT_SIREN, UNLABELED = "not_siren", "unlabeled"
+NOT_SIREN, UNLABELED, EXCLUDE = "not_siren", "unlabeled", "exclude"
 
 # 스크린 임계 — 확인된 진짜 사이렌(자동 트리거)에서 뽑은 하한이라, 진짜 사이렌은
 # 정의상 전부 hold 쪽으로 걸린다. 네거티브 쪽에서만 '확실히 아래'인 것을 고른다.
@@ -85,6 +85,29 @@ def _max_run(flags: str) -> int:
     return best
 
 
+WIN_S = 5.0     # 학습 창 길이 — 학습 리포 dataset.WIN_S 와 같아야 한다
+
+
+def _detector_span(row: dict) -> list[float] | None:
+    """사람이 구간을 안 적어 준 사이렌 클립의 구간을 검출 발화에서 유도한다.
+
+    이벤트 클립은 앞에 프리롤(기본 10초)이 붙어 있다. 클립 전체를 사이렌으로 주면
+    사이렌이 없는 프리롤 도로소음이 양성으로 학습돼, 줄이려던 오검출을 오히려
+    키운다.
+
+    det_flags 의 tick i 는 클립 시각 pre_roll+i 에서의 판정이고, 그 판정은 직전
+    5초를 본 결과다 → 사이렌이 있을 수 있는 구간은
+      [pre_roll + first + 1 - WIN,  pre_roll + last + 1].
+    발화가 하나도 없으면(수동 클립) None — 유도할 근거가 없다.
+    """
+    flags = row["det_flags"]
+    if "1" not in flags:
+        return None
+    first, last = flags.index("1"), len(flags) - 1 - flags[::-1].index("1")
+    pre, dur = float(row["pre_roll_sec"]), float(row["duration_sec"])
+    return [max(0.0, pre + first + 1 - WIN_S), min(dur, pre + last + 1)]
+
+
 def _screen(row: dict, audio: np.ndarray) -> tuple[bool, str]:
     """네거티브로 써도 되나 → (통과 여부, 이유)."""
     if row["trigger"] == "manual":
@@ -100,14 +123,37 @@ def _screen(row: dict, audio: np.ndarray) -> tuple[bool, str]:
     return True, f"{ticks}틱 conf{conf:.2f} f0 {f0:.0f} swing {swing:.0f}"
 
 
+def _load_review(path: Path) -> dict[tuple[str, str], dict]:
+    """청취 확정 라벨(collect/review.csv). 수집 중 버튼 라벨보다 **우선한다**.
+
+    현장 라벨은 놓치거나(unlabeled) 엉뚱한 클립에 붙을 수 있다(grace 소급).
+    사람이 실제로 듣고 적은 이 파일이 정본이다.
+    """
+    if not path.exists():
+        return {}
+    out: dict[tuple[str, str], dict] = {}
+    lines = [l for l in path.read_text(encoding="utf-8").splitlines()
+             if l.strip() and not l.startswith("#")]
+    for r in csv.DictReader(lines):
+        span = None
+        if r.get("t_start") and r.get("t_end"):
+            span = [float(r["t_start"]), float(r["t_end"])]
+        out[(r["session"], r["clip"])] = dict(label=r["label"], span=span,
+                                              note=r.get("note", ""))
+    return out
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="수집 세션 → 재학습 매니페스트")
     p.add_argument("--sessions", default="data/collect_sessions")
+    p.add_argument("--review", default="collect/review.csv",
+                   help="청취 확정 라벨 (수집 중 라벨보다 우선)")
     p.add_argument("--out", required=True, help="매니페스트 JSON 경로")
     p.add_argument("--holdout", type=float, default=0.35,
                    help="네거티브 중 평가용으로 뺄 비율(클립 단위)")
     a = p.parse_args(argv)
 
+    review = _load_review(Path(a.review))
     rows = []
     for f in sorted(glob.glob(f"{a.sessions}/*/labels.csv")):
         session = Path(f).parent
@@ -117,17 +163,37 @@ def main(argv=None) -> int:
             rows.append(r)
 
     neg, hold, siren = [], [], []
+    n_review = 0
     for r in rows:
         rec = dict(wav=r["_wav"], session=r["_session"], clip=r["clip"],
                    human_label=r["label"], trigger=r["trigger"],
                    duration_sec=float(r["duration_sec"]))
+        rv = review.get((r["_session"], r["clip"]))
+        if rv is not None:
+            # 청취 확정본이 이긴다. 스크린은 '사람이 못 들어본 것'을 위한 대리
+            # 판단일 뿐이라, 사람이 실제로 들은 순간 스크린은 할 일이 끝난다.
+            n_review += 1
+            rec.update(human_label=rv["label"], reviewed=True, note=rv["note"])
+            if rv["label"] == EXCLUDE:
+                # 사람이 듣고도 판단이 안 서는 오디오. 네거티브로 흘려보내면 안 된다
+                # — '사이렌인지 모르겠다'는 '사이렌이 아니다'가 아니다.
+                hold.append({**rec, "role": "hold", "why": "청취 판단 불가"})
+                continue
+            if rv["label"] in SIREN_LABELS:
+                span = rv["span"] or _detector_span(r)
+                siren.append({**rec, "role": "siren_eval", "span": span,
+                              "span_source": "human" if rv["span"] else "detector"})
+            else:
+                neg.append({**rec, "role": "neg", "why": "청취 확정 not_siren"})
+            continue
         if r["label"] in SIREN_LABELS:
             # manual = 버튼이 먼저 눌린 클립. 네거티브에 적용한 기준을 양성에도 똑같이
             # 적용한다 — 오누름이 실제로 확인됐고(실측: 3개 중 최소 1개), 이걸 평가
             # 사이렌에 넣으면 '모델이 사이렌을 놓쳤다'와 '사람이 잘못 눌렀다'가
             # 구분되지 않아 재현율 수치 자체가 거짓이 된다.
             role = "siren_suspect" if r["trigger"] == "manual" else "siren_eval"
-            siren.append({**rec, "role": role})
+            siren.append({**rec, "role": role, "span": _detector_span(r),
+                          "span_source": "detector"})
             continue
         ok, why = _screen(r, _read_wav(r["_wav"]))
         rec["why"] = why
@@ -152,7 +218,7 @@ def main(argv=None) -> int:
 
     def secs(role):
         return sum(d["duration_sec"] for d in man["items"] if d["role"] == role)
-    print(f"[export] → {out}")
+    print(f"[export] → {out}  (청취 확정 반영 {n_review}클립)")
     for role in ("neg_train", "neg_heldout", "siren_eval", "siren_suspect", "hold"):
         n = sum(1 for d in man["items"] if d["role"] == role)
         print(f"  {role:12s} {n:3d}클립 {secs(role)/60:5.1f}분")
