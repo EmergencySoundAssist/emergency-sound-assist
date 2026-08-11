@@ -122,7 +122,12 @@ def main(argv=None) -> int:
                    human_label=r["label"], trigger=r["trigger"],
                    duration_sec=float(r["duration_sec"]))
         if r["label"] in SIREN_LABELS:
-            siren.append({**rec, "role": "siren_eval"})
+            # manual = 버튼이 먼저 눌린 클립. 네거티브에 적용한 기준을 양성에도 똑같이
+            # 적용한다 — 오누름이 실제로 확인됐고(실측: 3개 중 최소 1개), 이걸 평가
+            # 사이렌에 넣으면 '모델이 사이렌을 놓쳤다'와 '사람이 잘못 눌렀다'가
+            # 구분되지 않아 재현율 수치 자체가 거짓이 된다.
+            role = "siren_suspect" if r["trigger"] == "manual" else "siren_eval"
+            siren.append({**rec, "role": role})
             continue
         ok, why = _screen(r, _read_wav(r["_wav"]))
         rec["why"] = why
@@ -148,7 +153,7 @@ def main(argv=None) -> int:
     def secs(role):
         return sum(d["duration_sec"] for d in man["items"] if d["role"] == role)
     print(f"[export] → {out}")
-    for role in ("neg_train", "neg_heldout", "siren_eval", "hold"):
+    for role in ("neg_train", "neg_heldout", "siren_eval", "siren_suspect", "hold"):
         n = sum(1 for d in man["items"] if d["role"] == role)
         print(f"  {role:12s} {n:3d}클립 {secs(role)/60:5.1f}분")
     print(f"  ※ hold 는 매니페스트에 남기되 학습·평가 어디에도 쓰지 않는다 — "
