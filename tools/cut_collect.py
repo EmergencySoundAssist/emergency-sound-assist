@@ -40,7 +40,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.types import SAMPLE_RATE
-from tools.cut_clips import WIN, _read_wav, _siren_spans, _windows, _write_wav
+from tools.cut_clips import (
+    TICK, WIN, _read_wav, _siren_flags, _siren_spans, _windows, _write_wav,
+)
 
 UNLABELED = "unlabeled"
 NOT_SIREN = "not_siren"     # 오검출 확인 클립 — 검출기 hard-negative 로만 자른다
@@ -57,6 +59,33 @@ def _fixed_span(duration: float, pre_roll: float, lead: float,
     """
     lo = max(0.0, pre_roll - lead)
     return lo, min(duration, lo + cap)
+
+
+def _negative_windows(audio) -> list[float]:
+    """오검출(not_siren) 클립에서 **검출기를 속인 5초 창**들의 시작 시각.
+
+    사이렌 구간용 _span_from_run 을 여기 쓰면 안 된다. 그 함수는 '창 번짐을
+    걷어내 실제로 사이렌이 울린 구간'을 복원하는 것이라 9틱 이상 연속 발화가
+    있어야 5초 창이 하나 나오는데, 오검출은 대부분 1~2틱 발화다(실측: 43개
+    사람 라벨 중 오검출 30개가 거의 전부 단발). 그대로 두면 하드 네거티브가
+    한 개도 안 나온다 — not_siren 버튼의 목적이 통째로 무산된다.
+
+    네거티브로 값어치 있는 건 **검출기가 그 순간 실제로 본 입력**이다. tick i 의
+    판정은 오디오 [(i+1)-WIN, i+1) 을 본 결과이므로 그 창을 그대로 오려낸다.
+    겹치는 창은 사실상 같은 소리라 먼저 잡힌 것만 남긴다.
+    """
+    flags = _siren_flags(audio)
+    out: list[float] = []
+    for i, f in enumerate(flags):
+        if not f:
+            continue
+        t0 = (i + 1) * TICK - WIN
+        if t0 < 0:                      # 클립 머리에 걸린 창 — 온전한 5초가 안 된다
+            continue
+        if out and t0 < out[-1] + WIN:  # 직전 창과 겹침 = 같은 소리
+            continue
+        out.append(t0)
+    return out
 
 
 def _parse_presses(s: str) -> list[tuple[float, str]]:
@@ -114,15 +143,20 @@ def _cut_session(session: Path, out_root: Path, lead: float) -> tuple[list[dict]
             continue
         audio = _read_wav(session / ev["clip"])
         duration = len(audio) / SAMPLE_RATE
-        tagged = _assign_spans(_siren_spans(audio),
-                               _parse_presses(ev.get("presses", "")), ev["label"])
-        n_dropped += sum(1 for _, _, lab in tagged if lab is None)
-        wins = [(t0, lab, "detector")
-                for lo, hi, lab in tagged if lab is not None
-                for t0 in _windows(lo, hi)]
+        if ev["label"] == NOT_SIREN:
+            # 오검출: 검출기를 속인 창 자체가 데이터다(사이렌 구간 복원이 아니라).
+            wins = [(t0, NOT_SIREN, "trigger_window")
+                    for t0 in _negative_windows(audio)]
+        else:
+            tagged = _assign_spans(_siren_spans(audio),
+                                   _parse_presses(ev.get("presses", "")), ev["label"])
+            n_dropped += sum(1 for _, _, lab in tagged if lab is None)
+            wins = [(t0, lab, "detector")
+                    for lo, hi, lab in tagged if lab is not None
+                    for t0 in _windows(lo, hi)]
         # 수동 = 검출기가 놓친 사이렌. 검출기 경로로 창이 0개면(구간 없음·부분
         # 검출로 5초 미만 모두 포함) 버튼 시점 기준 고정 창으로 폴백한다.
-        # not_siren 은 예외 — 검출기가 실제로 속은 구간만 negative 로 가치가 있고,
+        # not_siren 은 폴백 없음 — 검출기가 실제로 속은 창만 negative 로 가치가 있고,
         # 폴백까지 하면 그냥 도로소음이 not_siren/ 을 채운다.
         if not wins and ev["trigger"] == "manual" and ev["label"] != NOT_SIREN:
             lo, hi = _fixed_span(duration, float(ev["pre_roll_sec"]), lead)

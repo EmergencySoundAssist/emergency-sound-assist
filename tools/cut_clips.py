@@ -145,10 +145,11 @@ def _read_tags(path: Path) -> list[tuple[float, str]]:
     return tags
 
 
-def _siren_spans(audio: np.ndarray) -> list[tuple[float, float]]:
-    """창 오디오에서 사이렌 구간(창 로컬 초)을 찾는다.
+def _siren_flags(audio: np.ndarray) -> list[bool]:
+    """오디오를 tick 단위로 흘려 검출기의 사이렌 판정열을 만든다.
 
     analyze 는 5초 롤링 버퍼를 **전역 싱글턴에 들고** 있으므로 창마다 reset() 이 필수다.
+    tick i 의 판정은 오디오 [(i+1)-WIN, i+1) 초를 본 결과다.
     """
     from classifier.inference import analyze, reset
     from core.types import SoundClass
@@ -159,6 +160,12 @@ def _siren_spans(audio: np.ndarray) -> list[tuple[float, float]]:
     for start in range(0, len(audio) - n + 1, n):
         res = analyze(AudioChunk(samples=audio[start:start + n], sample_rate=SAMPLE_RATE))
         flags.append(res is not None and res["label"] is SoundClass.SIREN)
+    return flags
+
+
+def _siren_spans(audio: np.ndarray) -> list[tuple[float, float]]:
+    """창 오디오에서 사이렌 구간(창 로컬 초)을 찾는다."""
+    flags = _siren_flags(audio)
     return [_span_from_run(a, b) for a, b in _merge(_runs(flags), len(flags))]
 
 
