@@ -28,7 +28,7 @@ SAMPLE_RATE = 16_000          # Hz. 음성/환경음 분류에서 일반적으�
 # 참고: Airacle deploy 런타임은 stride 0.15초로 돌고 PRE 예비경보가 1.76초에 뜬다.
 # ⚠ 이 값을 줄이면 파이프라인 호출이 그만큼 잦아진다. 무거운 모듈(방향·접근·STT·BLE)과
 #   수집기 det_flags 는 **1초 격자를 유지**하도록 Pipeline 이 묶어 준다(TICK_SECONDS).
-CHUNK_SECONDS = 0.25
+CHUNK_SECONDS = 1.0
 TICK_SECONDS = 1.0            # 무거운 모듈·기록이 쓰는 논리적 틱(초). 청크 여러 개를 묶는다.
 CHANNELS = 4                  # ReSpeaker XVF-3000 = 4채널. 분류는 보통 1채널로 다운믹스.
 
