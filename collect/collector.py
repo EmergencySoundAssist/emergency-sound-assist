@@ -168,8 +168,12 @@ class SirenCollector:
                     c["model_subtype"], c["model_sub_conf"] = cls.subtype.value, sc
             if horn:
                 c["last_siren"] = self._clip_sec(c)     # 경적도 클립을 살려 둔다
-                if cls.confidence > c["conf_max"]:
-                    c["conf_max"] = cls.confidence
+                # ⚠ conf_max(=det_conf_max) 는 건드리지 않는다. 하류 도구
+                # (tools/export_hardneg._screen, tools/cut_collect)가 이 값을
+                # '사이렌다움'으로 읽으므로, 경적 확신도를 섞으면 경적 클립이
+                # 사이렌급으로 보여 스크린 판단이 틀어진다.
+                if cls.confidence > c["horn_conf_max"]:
+                    c["horn_conf_max"] = cls.confidence
 
             sec = self._clip_sec(c)
             over = sec >= self._max_sec
@@ -328,7 +332,8 @@ class SirenCollector:
             "presses": [],                    # 녹음 중 눌린 (클립 내 초, 라벨)
             "pre_roll": samples / sr - cur,
             "last_siren": samples / sr,       # 트리거 시점 = 마지막 사이렌 관측
-            "conf_max": cls.confidence if cls else 0.0,
+            "conf_max": (cls.confidence if (cls and trigger_class != "horn") else 0.0),
+            "horn_conf_max": (cls.confidence if (cls and trigger_class == "horn") else 0.0),
             "model_subtype": sub,
             "model_sub_conf": (cls.subtype_confidence or 0.0) if cls else 0.0,
             "t_wall": datetime.now().isoformat(timespec="seconds"),
@@ -354,6 +359,7 @@ class SirenCollector:
             "horn_flags": "".join("1" if f else "0" for f in c["horn_flags"]),
             "trigger_class": c["trigger_class"],
             "det_conf_max": round(c["conf_max"], 3),
+            "horn_conf_max": round(c["horn_conf_max"], 3),
             "model_subtype": c["model_subtype"],
             "model_sub_conf": round(c["model_sub_conf"], 3),
             "presses": "|".join(f"{t:.1f}:{lab}" for t, lab in c["presses"]),
@@ -375,7 +381,7 @@ class SirenCollector:
         """임시파일 + 원자 교체. 종료 동결·크래시가 반쯤 쓴 labels.csv 를 남기지 않게."""
         cols = ["clip", "label", "trigger", "trigger_class", "t_wall", "pre_roll_sec",
                 "duration_sec", "det_flags", "horn_flags", "det_conf_max",
-                "model_subtype", "model_sub_conf", "presses"]
+                "horn_conf_max", "model_subtype", "model_sub_conf", "presses"]
         path = self.session / "labels.csv"
         tmp = self.session / "labels.csv.tmp"
         with tmp.open("w", encoding="utf-8", newline="") as f:

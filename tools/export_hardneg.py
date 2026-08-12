@@ -49,6 +49,7 @@ from tools.cut_clips import _read_wav
 
 SIREN_LABELS = ("ambulance", "police", "fire", "unknown")
 NOT_SIREN, UNLABELED, EXCLUDE = "not_siren", "unlabeled", "exclude"
+LABEL_HORN = "horn"     # 경적 — 사이렌과 별개 클래스라 네거티브로 흘리면 안 된다
 
 # 스크린 임계 — 확인된 진짜 사이렌(자동 트리거)에서 뽑은 하한이라, 진짜 사이렌은
 # 정의상 전부 hold 쪽으로 걸린다. 네거티브 쪽에서만 '확실히 아래'인 것을 고른다.
@@ -110,6 +111,12 @@ def _detector_span(row: dict) -> list[float] | None:
 
 def _screen(row: dict, audio: np.ndarray) -> tuple[bool, str]:
     """네거티브로 써도 되나 → (통과 여부, 이유)."""
+    if row.get("trigger_class") == "horn":
+        # 경적 트리거 클립은 det_flags 가 전부 0이라 스크린을 그냥 통과한다.
+        # 그대로 두면 경적 오디오가 noise 라벨로 학습돼 **경적 검출이 망가진다**
+        # (경적은 siren/horn/noise 3-클래스 중 독립 클래스다). 사람이 듣고
+        # horn/not_siren 을 확정할 때까지 보류한다.
+        return False, "경적 트리거 — 사람 확인 필요(noise 로 흘리면 경적 검출이 망가진다)"
     if row["trigger"] == "manual":
         # 버튼이 먼저 눌린 클립 = 사람이 '사이렌이 들린다'고 주장한 오디오.
         # 오누름이 섞여 있고(실측 확인), 검출기는 여기서 아무 근거도 주지 못한다.
@@ -183,6 +190,11 @@ def main(argv=None) -> int:
                 # — '사이렌인지 모르겠다'는 '사이렌이 아니다'가 아니다.
                 hold.append({**rec, "role": "hold", "why": "청취 판단 불가"})
                 continue
+            if rv["label"] == LABEL_HORN:
+                # 경적 확정 — 사이렌 학습·평가 어디에도 안 쓴다. 경적은 독립 클래스라
+                # 별도 작업(경적 지연·오검출)에서 다뤄야 한다.
+                hold.append({**rec, "role": "horn", "why": "청취 확정 경적"})
+                continue
             if rv["label"] in SIREN_LABELS:
                 span = rv["span"] or _detector_span(r)
                 siren.append({**rec, "role": "siren_eval", "span": span,
@@ -223,7 +235,7 @@ def main(argv=None) -> int:
     def secs(role):
         return sum(d["duration_sec"] for d in man["items"] if d["role"] == role)
     print(f"[export] → {out}  (청취 확정 반영 {n_review}클립)")
-    for role in ("neg_train", "neg_heldout", "siren_eval", "siren_suspect", "hold"):
+    for role in ("neg_train", "neg_heldout", "siren_eval", "siren_suspect", "horn", "hold"):
         n = sum(1 for d in man["items"] if d["role"] == role)
         print(f"  {role:12s} {n:3d}클립 {secs(role)/60:5.1f}분")
     print(f"  ※ hold 는 매니페스트에 남기되 학습·평가 어디에도 쓰지 않는다 — "

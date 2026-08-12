@@ -367,3 +367,22 @@ def test_collect_button_rects_fit_and_do_not_overlap():
         xs = sorted(rects, key=lambda r: r[0])
         for a, b in zip(xs, xs[1:]):
             assert a[0] + a[2] <= b[0]      # 서로 겹치지 않는다
+
+
+def test_horn_clip_is_not_exported_as_a_siren_negative(tmp_path):
+    """경적 클립은 det_flags 가 전부 0이라 네거티브 스크린을 그냥 통과한다.
+    그대로 두면 경적 오디오가 noise 로 학습돼 경적 검출이 망가진다."""
+    import sys, types
+    from tools.export_hardneg import _screen
+    row = {"trigger": "auto", "trigger_class": "horn",
+           "det_flags": "0000", "det_conf_max": "0.0"}
+    ok, why = _screen(row, np.zeros(16_000, dtype=np.float32))
+    assert not ok and "경적" in why
+
+
+def test_siren_clip_still_screens_normally():
+    from tools.export_hardneg import _screen
+    row = {"trigger": "auto", "trigger_class": "siren",
+           "det_flags": "1000", "det_conf_max": "0.5"}
+    ok, _ = _screen(row, np.zeros(16_000, dtype=np.float32))
+    assert ok            # 약한 단발 검출 + 무음 → 네거티브로 통과
