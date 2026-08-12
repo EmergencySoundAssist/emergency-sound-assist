@@ -31,6 +31,7 @@ from typing import Optional
 import numpy as np
 
 from core.types import (
+    TICK_SECONDS,
     AudioChunk,
     ClassResult,
     FusedResult,
@@ -74,20 +75,52 @@ class Pipeline:
         self._stt = stt_worker           # 평상시 음성→자막 (백그라운드, 없으면 STT 생략)
         self._caption = CaptionGate(hold_seconds)   # 자막 3초 유지 + 표시 중 입력 차단
         self._now = clock if clock is not None else time.monotonic
+        # ── 두 격자 ──
+        # 검출은 청크마다(0.25초) — 경보 지연의 하한을 낮춘다.
+        # 방향·접근·STT·기록은 TICK_SECONDS(1초)로 묶는다 — 이 모듈들은 1초 창을
+        # 전제로 튜닝돼 있고(STT VAD 비율, 접근 추세 창, 융합 창 3틱=1.5초),
+        # 수집기 det_flags 도 '1틱=1초'라 하류 도구가 그 규약에 묶여 있다.
+        self._acc: list[np.ndarray] = []
+        self._acc_n = 0
+        self.full_tick = False           # 이번 process() 가 1초 경계였나 (main 이 읽는다)
+        self.tick_chunk: Optional[AudioChunk] = None   # 그 1초의 오디오(수집기용)
+        self.tick_raw: Optional[ClassResult] = None    # 그 1초의 raw 판정(긴급 우선)
+        self._tick_raw_acc: Optional[ClassResult] = None
+        self._direction = DirectionResult(direction=Direction.UNKNOWN)
+        self._approach_res = ApproachResult(motion=Motion.UNKNOWN)
 
     def process(self, chunk: AudioChunk) -> FusedResult:
         mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
+        sr = chunk.sample_rate
         # 디바운스 전 원판정도 남긴다 — 수집기(collect)는 벽시계 잔향이 섞이지 않은
         # raw 를 써야 오디오 시간축과 일관된다(--wav 재수집은 실시간보다 빠르다).
-        self.last_raw = classify(mono_chunk)
+        self.last_raw = classify(mono_chunk)     # ← 매 청크(0.25초 격자)
         cls = self._debounce(self.last_raw)
+        # 1초 틱의 대표 판정: 그 안에서 **가장 먼저 나온 긴급**을 남긴다. 수집기가
+        # det_flags 를 1초 단위로 적으므로, 4조각 중 하나라도 울리면 그 틱은 울린 것이다.
+        if self._tick_raw_acc is None or (
+                self.last_raw.is_emergency and not self._tick_raw_acc.is_emergency):
+            self._tick_raw_acc = self.last_raw
         speech: Optional[SpeechResult] = None
+
+        # 1초가 모였는지 — 무거운 모듈은 이 경계에서만 돈다
+        self._acc.append(np.asarray(mono_chunk.samples))
+        self._acc_n += mono_chunk.samples.size
+        self.full_tick = self._acc_n >= int(TICK_SECONDS * sr)
+        tick_chunk = None
+        if self.full_tick:
+            tick_chunk = AudioChunk(samples=np.concatenate(self._acc), sample_rate=sr)
+            self._acc, self._acc_n = [], 0
+            self.tick_chunk = tick_chunk
+            self.tick_raw = self._tick_raw_acc
+            self._tick_raw_acc = None
 
         if cls.is_emergency:                     # ── 긴급: 경고 집중, STT 멈춤 ──
             entering = not self._active          # 긴급 진입 edge 인지
             self._active = True
-            direction = self._direction(chunk)
-            approach = self._fuse(self._approach.update(mono_chunk))
+            if tick_chunk is not None:
+                self._direction = self._estimate_direction(chunk)
+                self._approach_res = self._fuse(self._approach.update(tick_chunk))
             # 긴급이 지속되는 동안 매 틱 reset 하면 이미 빈 버퍼를 계속 비우고,
             # 띄워 둔 자막도 반복해서 지운다. 진입하는 순간에만 한 번 비운다.
             if entering and self._stt is not None:
@@ -98,13 +131,15 @@ class Pipeline:
                 self._approach.reset()
                 self._fusion.reset()             # 다음 이벤트가 이전 판정을 물려받지 않게
                 self._active = False
-            direction = DirectionResult(direction=Direction.UNKNOWN)
-            approach = ApproachResult(motion=Motion.UNKNOWN)
-            if self._stt is not None:
-                # 자막 3초 유지 + 표시 중 STT 입력 차단은 CaptionGate 가 담당
-                speech = self._caption.update(self._stt, mono_chunk, self._now())
+            self._direction = DirectionResult(direction=Direction.UNKNOWN)
+            self._approach_res = ApproachResult(motion=Motion.UNKNOWN)
+            if self._stt is not None and tick_chunk is not None:
+                # STT VAD 는 1초 청크 비율로 튜닝돼 있다(stt/config.py) — 조각으로
+                # 주면 게이트가 흔들리므로 반드시 묶은 뒤 넘긴다.
+                speech = self._caption.update(self._stt, tick_chunk, self._now())
 
-        return FusedResult(sound=cls, direction=direction, approach=approach, speech=speech)
+        return FusedResult(sound=cls, direction=self._direction,
+                           approach=self._approach_res, speech=speech)
 
     def _debounce(self, raw: ClassResult) -> ClassResult:
         """분류 깜빡임을 잔향으로 메운다 — 켜기는 즉시, 끄기는 hangover 후.
@@ -144,7 +179,7 @@ class Pipeline:
             return acoustic
         return replace(acoustic, motion=decision.motion)
 
-    def _direction(self, chunk: AudioChunk) -> DirectionResult:
+    def _estimate_direction(self, chunk: AudioChunk) -> DirectionResult:
         """다채널이면 ch1~4 SRP-PHAT, 1채널이면 ReSpeaker 자체 DoA 폴백."""
         raw4 = _raw4(np.asarray(chunk.samples))
         if raw4 is None:

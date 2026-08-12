@@ -152,6 +152,8 @@ class _OnnxClassifier:
         self._sess = None
         self._in = None
         self._buf = np.zeros(0, dtype=np.float32)
+        self._buf_in = np.zeros(0, dtype=np.float32)   # 입력 레이트 원본 버퍼
+        self._buf_sr = 0
         self._sub_sess = None
         self._sub_in = None
         self._sub_unavailable = False        # 차종 모델 없음 확인 후 재시도 방지
@@ -234,6 +236,7 @@ class _OnnxClassifier:
 
     def reset(self) -> None:
         self._buf = np.zeros(0, dtype=np.float32)
+        self._buf_in = np.zeros(0, dtype=np.float32)
         self._last_x = None
 
     # ── 하이브리드 API — 마진 판정 + 창 재사용 (석우 infer_trt.step 방식) ──
@@ -244,8 +247,18 @@ class _OnnxClassifier:
         정규화된 5초 창을 보관(self._last_x) → subtype_probs()/speed_evidence()가 재사용(멜 1회).
         반환: dict(label, conf, m_siren, m_horn, m_fast|None) — 버퍼 부족(워밍업)이면 None.
         """
-        y = _resample(_mono(chunk.samples), chunk.sample_rate, SR_MODEL)
-        self._buf = np.concatenate([self._buf, y])[-BUF_SAMPLES:]
+        # 버퍼는 **입력 레이트 그대로** 들고, 평가할 때 창 전체를 한 번에 리샘플한다.
+        # 청크마다 따로 리샘플해 이어 붙이면 조각 경계마다 FIR 과도응답이 남아,
+        # 청크가 작을수록(0.25초) 이음매가 잦아져 판정이 흔들린다(실측: 같은 오디오인데
+        # 1.0초 격자 최대 지연 4.0초 → 0.25초 격자 7.0초로 악화). 이렇게 두면 결과가
+        # **청크 크기와 무관**해진다 — 격자를 자유롭게 촘촘하게 할 수 있다.
+        sr_in = int(chunk.sample_rate)
+        if sr_in != self._buf_sr:                # 입력 레이트가 바뀌면 버퍼를 새로 시작
+            self._buf_in = np.zeros(0, dtype=np.float32)
+            self._buf_sr = sr_in
+        keep = int(WIN_S * sr_in)
+        self._buf_in = np.concatenate([self._buf_in, _mono(chunk.samples)])[-keep:]
+        self._buf = _resample(self._buf_in, sr_in, SR_MODEL)
         if self._buf.size < N_FFT:               # 아직 너무 짧음
             return None
 

@@ -459,7 +459,7 @@ def test_pipeline_resets_stt_only_on_emergency_transition(monkeypatch):
             SoundClass.SIREN if emergency["on"] else SoundClass.NORMAL_TRAFFIC, 0.9),
     )
     # 방향·접근은 이 테스트의 관심사가 아니다(ONNX·pyroomacoustics 회피).
-    monkeypatch.setattr(runner_mod.Pipeline, "_direction",
+    monkeypatch.setattr(runner_mod.Pipeline, "_estimate_direction",
                         lambda self, chunk: DirectionResult(direction=Direction.UNKNOWN))
     monkeypatch.setattr(runner_mod.Pipeline, "_fuse", lambda self, acoustic: acoustic)
 
@@ -493,7 +493,7 @@ def test_pipeline_debounce_holds_emergency_through_flicker(monkeypatch):
         lambda chunk: ClassResult.from_label(
             SoundClass.SIREN if emergency["on"] else SoundClass.NORMAL_TRAFFIC, 0.9),
     )
-    monkeypatch.setattr(runner_mod.Pipeline, "_direction",
+    monkeypatch.setattr(runner_mod.Pipeline, "_estimate_direction",
                         lambda self, chunk: DirectionResult(direction=Direction.UNKNOWN))
     monkeypatch.setattr(runner_mod.Pipeline, "_fuse", lambda self, acoustic: acoustic)
 

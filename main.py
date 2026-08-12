@@ -80,9 +80,12 @@ def run_stream(chunks, stt_worker=None, hud=None, sender=None, collector=None) -
             fused = pipe.process(chunk)
             print(f"[{i:3d}] {fused.to_korean():<22s}  (분류 conf={fused.sound.confidence:.2f})")
             _stt_diag(stt_worker, stt_state)
-            if collector is not None:    # 수집 모드: 디바운스 전(raw) 판정으로 클립을 연다/닫는다
-                collector.on_result(chunk, pipe.last_raw)
-            if sender is not None:       # BLE: 폰(→워치 미러링)으로 전송
+            # 수집·BLE 는 1초 틱에서만 — 청크가 0.25초라 매 청크로 보내면 det_flags 가
+            # 0.25초 틱이 되어 하류 도구의 '1틱=1초' 규약이 깨지고, BLE 는 4배로 쏜다.
+            # 오디오는 손실 없이 모아서 넘어간다(Pipeline 이 누적해 tick_chunk 로 준다).
+            if collector is not None and pipe.full_tick:
+                collector.on_result(pipe.tick_chunk, pipe.tick_raw)
+            if sender is not None and pipe.full_tick:
                 sender.send_fused(fused)
             if hud is not None:
                 hud.update(fused)
