@@ -104,7 +104,10 @@ class SirenCollector:
         max_sec: float = 120.0,
         grace: float = 15.0,
         clock=time.monotonic,
+        show_buttons: bool = False,
     ) -> None:
+        # 기본은 조용한 표시(제품 화면 그대로 + 키보드 라벨). 버튼 띠는 개발용.
+        self.show_buttons = bool(show_buttons)
         safe = place.replace("/", "-").replace(" ", "") or "미지정"
         self.session = _session_dir(out_root, safe)
         (self.session / "clips").mkdir(parents=True, exist_ok=True)
@@ -273,6 +276,7 @@ class SirenCollector:
                 "clips": len(self._rows),
                 "session": self.session.name,
                 "closed": self._closed,
+                "show_buttons": self.show_buttons,
             }
 
     def close(self) -> Optional[str]:

@@ -20,7 +20,7 @@ class _FakeCollector:
     def __init__(self, recording=None, label=None):
         self._st = {"recording": recording, "elapsed": 7.0, "label": label,
                     "feedback": "라벨 ✓ 구급차 (직전 클립)", "counts": {}, "clips": 2,
-                    "session": "20260811_1000_테스트"}
+                    "session": "20260811_1000_테스트", "show_buttons": True}
         self.labels = []
         self.cancels = 0
 
@@ -39,9 +39,9 @@ def test_overlay_draws_in_all_states_and_exposes_buttons():
     surf = pygame.Surface((1280, 360))
     r = Renderer(HudConfig(width=1280, height=360))
     r.draw(surf, None, collect=_FakeCollector().status())           # 대기 화면에도 버튼
-    assert len(r.collect_buttons) == 6
+    assert len(r.collect_buttons) == 6  # show_buttons=True 일 때만
     r.draw(surf, None, collect=_FakeCollector("auto", "fire").status())
-    assert len(r.collect_buttons) == 6
+    assert len(r.collect_buttons) == 6  # show_buttons=True 일 때만
     r.draw(surf, None)                                              # 수집 없으면 버튼 없음
     assert r.collect_buttons == []
     pygame.quit()
@@ -108,4 +108,30 @@ def test_click_hits_same_button_in_reflect_mode():
     flipped = (rect.centerx, h - 1 - rect.centery)  # 화면(뒤집힌)에서 보이는 위치
     d._collect_input(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=flipped))
     assert fake.labels == ["ambulance"]
+    pygame.quit()
+
+
+def test_quiet_mode_draws_no_buttons_but_keyboard_still_labels():
+    """기본은 제품 화면 그대로 — 버튼 띠 없이 키보드로만 라벨을 받는다.
+    버튼이 없으면 터치 판정 대상도 없어야 한다(빈 화면 아무 데나 눌러도 무반응)."""
+    pygame.init()
+    surf = pygame.Surface((1280, 360))
+    r = Renderer(HudConfig(width=1280, height=360))
+    st = _FakeCollector("auto", "fire").status()
+    st["show_buttons"] = False
+    r.draw(surf, None, collect=st)
+    assert r.collect_buttons == []          # 버튼 없음
+    pygame.quit()
+
+
+def test_quiet_mode_keyboard_input_still_reaches_collector():
+    d = HudDisplay(HudConfig(width=320, height=180, fullscreen=False, fps=5))
+    fake = _FakeCollector()
+    fake._st["show_buttons"] = False
+    d.set_collector(fake)
+    d._init_pygame()
+    d._tick()
+    d._collect_input(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_1))
+    d._collect_input(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_h))
+    assert fake.labels == ["ambulance", "horn"]
     pygame.quit()

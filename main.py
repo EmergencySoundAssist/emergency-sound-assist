@@ -175,6 +175,9 @@ def main() -> None:
                          "수동 녹음(미검출 표본). --hud 와 함께 권장.")
     ap.add_argument("--place", default="미지정",
                     help="--collect 세션 폴더명에 들어갈 장소. 예: 소방서앞")
+    ap.add_argument("--collect-buttons", action="store_true",
+                    help="수집 라벨 버튼 띠를 화면에 표시(개발용). 기본은 조용한 표시 — "
+                         "제품 화면 그대로 두고 키보드로만 라벨을 받는다.")
     ap.add_argument("--collect-out", default="data/collect_sessions",
                     help="--collect 세션 폴더를 만들 위치")
     args = ap.parse_args()
@@ -224,10 +227,13 @@ def main() -> None:
     collector = None
     if args.collect:
         from collect import SirenCollector
-        collector = SirenCollector(out_root=args.collect_out, place=args.place)
+        collector = SirenCollector(out_root=args.collect_out, place=args.place,
+                                   show_buttons=args.collect_buttons)
         print(f"[collect] 세션: {collector.session}")
-        print("[collect] 감지되면 자동 녹음 · 버튼 1 구급차 / 2 경찰차 / 3 소방차 / u 차종모름"
-              " / z 라벨취소 · 미감지 때 버튼 = 수동 녹음")
+        print("[collect] 감지되면 자동 녹음 · 키 1 구급차 / 2 경찰차 / 3 소방차 / u 차종모름"
+              " / h 경적 / n 사이렌아님 / z 취소 · 미감지 때 키 = 수동 녹음")
+        print("[collect] 화면은 제품 그대로 — 라벨은 키보드로만 받는다"
+              f"{' (버튼 띠 표시 중)' if args.collect_buttons else ''}")
         if not args.hud:
             print("[collect] 경고: --hud 없이는 라벨 버튼이 없다 — 자동 클립만 "
                   "unlabeled 로 쌓인다. --hud 를 함께 켤 것.", file=sys.stderr)

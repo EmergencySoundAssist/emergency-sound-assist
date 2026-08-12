@@ -182,12 +182,38 @@ class Renderer:
         else:
             self.collect_buttons = []
 
+    def _draw_collect_quiet(self, surface, st, w, h):
+        """조용한 수집 표시 — 화면은 제품 그대로 두고, 라벨은 키보드로만 받는다.
+
+        버튼 띠를 띄우면 화면이 개발 도구처럼 보인다. 실사용·시연에서는 제품 화면이
+        그대로 나와야 하므로 기본값을 이쪽으로 둔다. 다만 **완전히 숨기면 입력이
+        먹었는지 알 수 없어** 라벨 품질이 떨어지므로(오늘 라벨 누락이 실제로 있었다),
+        최소 두 가지만 남긴다:
+          · 녹음 중 점 하나 — 지금 클립이 열려 있다는 사실
+          · 방금 누른 라벨 한 줄(4초) — 입력이 먹었다는 확인
+
+        둘 다 화면 구석에 작게, 점멸 없이(광과민 규칙) 그린다. 버튼 띠가 필요하면
+        --collect-buttons 로 켠다.
+        """
+        pad = max(6, round(h * 0.02))
+        y = h - pad - self._f_unit.get_height()
+        if st.get("recording"):
+            r = max(3, round(h * 0.012))
+            pygame.draw.circle(surface, VEH_FIRE, (pad + r, y + r + 2), r)
+        fb = st.get("feedback")
+        if fb:
+            s = self._f_unit.render(fb, True, MUTED)
+            surface.blit(s, (w - pad - s.get_width(), y))
+        return []                       # 버튼 없음 → 터치 판정 대상도 없음
+
     def _draw_collect(self, surface, st, w, h):
-        """수집 모드 하단 띠: 차종 버튼 4개 + 녹음 상태 한 줄. 점멸 없음(광과민 규칙).
+        """수집 모드 하단 띠: 라벨 버튼 + 녹음 상태 한 줄. 점멸 없음(광과민 규칙).
 
         녹음 중이고 그 클립에 라벨이 붙었으면 해당 버튼만 채워진다 — 조수석이
         '내 입력이 먹었는지'를 흘긋 봐서 알 수 있어야 한다.
         """
+        if not st.get("show_buttons"):
+            return self._draw_collect_quiet(surface, st, w, h)
         rects = hud_card.collect_button_rects(w, h)
         recording = st.get("recording")
         out = []
