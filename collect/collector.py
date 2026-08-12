@@ -121,6 +121,7 @@ class SirenCollector:
         self._sr: Optional[int] = None        # 첫 청크에서 확정
         self._pos = 0.0                       # 지금까지 흘러간 오디오(초) — 내부 시간축
         self._ring: deque[np.ndarray] = deque()
+        self._ring_raw: deque[np.ndarray] = deque()   # ch1 원본(있으면)
         self._ring_sec = 0.0
         self._clip: Optional[dict] = None     # 열린 클립 (없으면 None)
         self._rows: list[dict] = []           # labels.csv 행 (통째 재작성용)
@@ -133,6 +134,7 @@ class SirenCollector:
     def on_result(self, chunk: AudioChunk, cls: ClassResult) -> None:
         """매 틱(1초 청크) 호출. **디바운스 전(raw)** 분류 결과를 받는다."""
         mono = _channel0(chunk)
+        raw = _channel_raw(chunk)          # ch1 원본 — 차종 가설(ch0 DSP) 검증용
         siren = bool(cls.is_emergency and cls.label is SoundClass.SIREN)
         # 경적도 긴급으로 HUD 를 띄우므로 같이 모은다. 안 모으면 경적 쪽 지연·오검출은
         # 데이터가 없어 분석 자체가 불가능하다(1차 수집에서 실제로 그랬다).
@@ -146,7 +148,7 @@ class SirenCollector:
             self._pos += dur
 
             if self._clip is None:
-                self._ring_push(mono, dur)
+                self._ring_push(mono, dur, raw)
                 if siren or horn:
                     # 사이렌·경적 어느 쪽이든 클립을 연다. 무엇이 열었는지는
                     # trigger_class 로 남겨, 나중에 두 문제를 갈라서 볼 수 있게 한다.
@@ -156,6 +158,8 @@ class SirenCollector:
 
             c = self._clip
             c["frames"].append(mono)
+            if raw is not None:
+                c["raw"].append(raw)
             c["samples"] += mono.size
             c["flags"].append(siren)
             c["horn_flags"].append(horn)
@@ -295,18 +299,21 @@ class SirenCollector:
     def _clip_sec(self, c: dict) -> float:
         return c["samples"] / float(self._sr or 1)
 
-    def _ring_push(self, mono: np.ndarray, dur: float) -> None:
+    def _ring_push(self, mono: np.ndarray, dur: float,
+                   raw: "np.ndarray | None" = None) -> None:
         """방금 청크를 넣고, '방금 청크 이전' 이력이 pre_roll 을 넘는 만큼만 버린다.
 
         pre_roll 은 트리거 **앞쪽** 오디오 약속이므로 방금 청크는 셈에서 뺀다 —
         포함해 버리면 자동 트리거의 실제 프리롤이 한 청크(1초) 짧아진다.
         """
         self._ring.append(mono)
+        self._ring_raw.append(raw if raw is not None else np.zeros(0, dtype=np.float32))
         self._ring_sec += dur
         sr = float(self._sr or 1)
         while (self._ring
                and self._ring_sec - dur - self._ring[0].size / sr >= self._pre_roll):
             self._ring_sec -= self._ring.popleft().size / sr
+            self._ring_raw.popleft()
 
     def _open_clip(self, trigger: str, label: str, cls: Optional[ClassResult],
                    trigger_class: str = "") -> None:
@@ -316,6 +323,7 @@ class SirenCollector:
         직전 클립이 닫힌 직후라 링이 얕으면 프리롤도 그만큼 짧다(중복 없음이 우선).
         """
         frames = list(self._ring)
+        raws = [r for r in self._ring_raw if r.size]
         samples = int(sum(f.size for f in frames))
         sr = float(self._sr or 1)
         cur = frames[-1].size / sr if (trigger == "auto" and frames) else 0.0
@@ -324,6 +332,7 @@ class SirenCollector:
             "trigger": trigger,
             "label": label,
             "frames": frames,
+            "raw": raws,
             "samples": samples,
             # det_flags 는 트리거 틱부터 기록한다 (프리롤 틱들의 판정은 링에 없다)
             "flags": [trigger_class == "siren"] if trigger == "auto" else [],
@@ -339,6 +348,7 @@ class SirenCollector:
             "t_wall": datetime.now().isoformat(timespec="seconds"),
         }
         self._ring.clear()
+        self._ring_raw.clear()
         self._ring_sec = 0.0
 
     def _close_clip(self) -> None:
@@ -348,6 +358,9 @@ class SirenCollector:
         name = f"{len(self._rows):03d}_{c['trigger']}.wav"
         _write_wav(self.session / "clips" / name,
                    np.concatenate(c["frames"]), self._sr)
+        if c["raw"]:                      # ch1 원본 — 있으면 나란히 저장
+            _write_wav(self.session / "clips_raw" / name,
+                       np.concatenate(c["raw"]), self._sr)
         self._rows.append({
             "clip": f"clips/{name}",
             "label": c["label"],
@@ -399,6 +412,21 @@ def _channel0(chunk: AudioChunk) -> np.ndarray:
     s = np.asarray(chunk.samples)
     mono = s[:, 0] if s.ndim == 2 else s
     return np.ascontiguousarray(mono, dtype=np.float32)
+
+
+def _channel_raw(chunk: AudioChunk) -> Optional[np.ndarray]:
+    """ReSpeaker 원본 마이크 채널(ch1). 1채널 입력이면 None.
+
+    왜 같이 저장하나: 분류기가 먹는 ch0 은 ReSpeaker(XVF-3000)의 **빔포밍·AEC 를
+    거친** 채널이고, 그 DSP 는 음성용으로 튜닝돼 있다. 차종 모델이 실차에서
+    무너지는 원인이 이 비선형 처리일 수 있는데(EQ·소음 증강으로는 재현이 안 된다 —
+    실측 채널 재학습도 실패했다), 원본 채널이 없으면 가설을 확인할 방법이 없다.
+    같은 사이렌을 ch0/ch1 두 벌로 남겨 두면 오프라인에서 바로 가른다.
+    """
+    s = np.asarray(chunk.samples)
+    if s.ndim != 2 or s.shape[1] < 2:
+        return None
+    return np.ascontiguousarray(s[:, 1], dtype=np.float32)
 
 
 def _write_wav(path: Path, x: np.ndarray, sr: int) -> None:

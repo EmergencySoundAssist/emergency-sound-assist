@@ -33,3 +33,15 @@ session,clip,label,t_start,t_end,note
 20260811_152229_서울역사박물관,clips/052_auto.wav,exclude,,,청취 판단 불가 — 제외
 20260811_152229_서울역사박물관,clips/053_auto.wav,fire,8,35,청취확정 구간
 20260811_152229_서울역사박물관,clips/054_auto.wav,ambulance,3,28,청취확정 구간
+20260812_222522_안국역4번출구,clips/000_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/001_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/002_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/003_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/004_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/005_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/006_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/007_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/008_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/009_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/010_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
+20260812_222522_안국역4번출구,clips/011_auto.wav,not_siren,,,청취확인 오검출 (신모델 early2 만 발화 · 사이렌 없었음)
