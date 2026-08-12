@@ -261,15 +261,18 @@ class _OnnxClassifier:
         i = int(prob.argmax())
 
         m_fast = None
+        fast_label = None
         fs = self._fast_session()
         if fs is not None:                        # 예비: 같은 멜의 끝 2초만, 별도 정규화
             xf = np.ascontiguousarray(_norm_win(m[:, -FAST_FRAMES:])[None, None], dtype=np.float32)
             zf = fs.run(None, {self._fast_in: xf})[0][0]
             m_fast = float(zf[0] - max(zf[1], zf[2]))
+            fast_label = _TO_SOUNDCLASS[CLASSES[int(np.argmax(zf))]]
 
         self._last_x = x
         return {"label": _TO_SOUNDCLASS[CLASSES[i]], "conf": float(prob[i]),
-                "m_siren": m_siren, "m_horn": m_horn, "m_fast": m_fast}
+                "m_siren": m_siren, "m_horn": m_horn, "m_fast": m_fast,
+                "fast_label": fast_label}
 
     def subtype_probs(self):
         """마지막 analyze 창 → 차종 softmax 확률[3] (yt 파인튜닝판). 모델 없으면 None.
@@ -312,10 +315,23 @@ class _OnnxClassifier:
         )
 
     def infer(self, chunk: AudioChunk) -> ClassResult:
-        """분류 단독 API. 사이렌이면 동일 5초 창에서 차종도 함께 반환한다."""
+        """분류 단독 API. 사이렌이면 동일 5초 창에서 차종도 함께 반환한다.
+
+        **경적만 2초 창을 함께 본다.** 경적은 짧다 — AI-Hub 기준 중앙 2.8초이고
+        65%가 5초 미만이라, 5초 창에서는 경적이 창의 절반도 못 채우고 창 단위
+        정규화가 그마저 희석한다. 그래서 경적은 '늦게 뜨는' 게 아니라 **아예
+        놓친다**(실측: 5초 창 43/57 → 2초 창을 더하면 52/57, 지연은 둘 다 1.0초).
+        대가는 실차 네거티브 11/49 → 13/49, 음악 3/12 → 3/12 로 작다.
+
+        사이렌까지 2초 창을 열면(전체 OR) 네거티브가 11 → 23/49 로 뛰는데 사이렌
+        지연은 2.0초 그대로라 이득이 없다. 그래서 **경적에만** 연다.
+        """
         res = self.analyze(chunk)
         if res is None:
             return ClassResult.from_label(SoundClass.NORMAL_TRAFFIC, 0.0)
+        if (res["label"] is SoundClass.NORMAL_TRAFFIC
+                and res.get("fast_label") is SoundClass.HORN):
+            return ClassResult.from_label(SoundClass.HORN, res["conf"])
         subtype = subtype_confidence = None
         if res["label"] is SoundClass.SIREN and self._last_x is not None:
             subtype, subtype_confidence = self._infer_subtype(self._last_x)

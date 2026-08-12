@@ -386,3 +386,39 @@ def test_siren_clip_still_screens_normally():
            "det_flags": "1000", "det_conf_max": "0.5"}
     ok, _ = _screen(row, np.zeros(16_000, dtype=np.float32))
     assert ok            # 약한 단발 검출 + 무음 → 네거티브로 통과
+
+
+# ── 경적 2초 창 (classifier.infer 계약) ─────────────────────────────────
+
+def test_infer_uses_fast_window_for_horn_only(monkeypatch):
+    """경적은 짧아(중앙 2.8초) 5초 창에서 놓친다 — 2초 창이 경적이라 하면 인정한다.
+    다만 사이렌까지 열어 주면 오경보가 2배가 되므로 경적에만 연다."""
+    import classifier.inference as CI
+    from core.types import SoundClass
+
+    def fake(res):
+        monkeypatch.setattr(CI._CLF, "analyze", lambda chunk: res)
+        return CI._CLF.infer(_chunk())
+
+    # 5초=소음 · 2초=경적 → 경적으로 승격
+    r = fake({"label": SoundClass.NORMAL_TRAFFIC, "conf": 0.7,
+              "m_siren": -3.0, "m_horn": -1.0, "m_fast": -2.0,
+              "fast_label": SoundClass.HORN})
+    assert r.label is SoundClass.HORN and r.is_emergency
+
+    # 5초=소음 · 2초=사이렌 → 승격하지 않는다 (사이렌은 5초 창이 결정)
+    r = fake({"label": SoundClass.NORMAL_TRAFFIC, "conf": 0.7,
+              "m_siren": -3.0, "m_horn": -1.0, "m_fast": 1.0,
+              "fast_label": SoundClass.SIREN})
+    assert r.label is SoundClass.NORMAL_TRAFFIC
+
+    # 5초가 이미 사이렌이면 2초 창이 뭐라 하든 사이렌 (차종도 그대로 붙는다)
+    r = fake({"label": SoundClass.SIREN, "conf": 0.9,
+              "m_siren": 3.0, "m_horn": -1.0, "m_fast": 2.0,
+              "fast_label": SoundClass.HORN})
+    assert r.label is SoundClass.SIREN
+
+    # 2초 모델이 없으면(fast_label None) 기존 동작 그대로
+    r = fake({"label": SoundClass.NORMAL_TRAFFIC, "conf": 0.7,
+              "m_siren": -3.0, "m_horn": -1.0, "m_fast": None, "fast_label": None})
+    assert r.label is SoundClass.NORMAL_TRAFFIC
