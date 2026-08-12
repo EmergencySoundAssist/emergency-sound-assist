@@ -42,8 +42,8 @@ _TO_SOUNDCLASS = {                             # 학습 클래스 → core.types
     "noise": SoundClass.NORMAL_TRAFFIC,
 }
 _MODELS = Path(__file__).resolve().parent / "models"
-# 실차 파인튜닝판(_early2)이 기본이다. 런타임 경로 실측(워밍업 틱 제외, 실차 17클립):
-#   지연 중앙 5.0초 → 2.0초 · 네거티브 오발화 14.7% → 9.0%(클립 45/49 → 16/49)
+# 실차 파인튜닝판(_early3)이 기본이다. 런타임 경로 실측(워밍업 틱 제외, 실차 17클립):
+#   지연 중앙 5.0초 → 2.0초 · 어제 네거티브 클립 45/49 → 10/49 · 오늘밤 음악 12/12 → 3/12
 #   사이렌 놓침 0/17 유지. 지연과 오경보가 함께 줄었다 (docs/collect/latency.md).
 # 구모델로 즉시 되돌리려면 ESA_DETECT_MODEL=cnn_attn_full_s42.onnx 로 실행한다.
 _MODEL_PATH = _MODELS / os.environ.get("ESA_DETECT_MODEL", "cnn_attn_full_s42_early3.onnx")
