@@ -57,3 +57,5 @@ Thumbs.db
 !classifier/models/cnn_attn_full_s42_early2_87f.onnx
 !classifier/models/cnn_attn_full_s42_early3.onnx
 !classifier/models/cnn_attn_full_s42_early3_87f.onnx
+!classifier/models/cnn_attn_full_s42_early4.onnx
+!classifier/models/cnn_attn_full_s42_early4_87f.onnx

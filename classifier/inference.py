@@ -42,11 +42,17 @@ _TO_SOUNDCLASS = {                             # 학습 클래스 → core.types
     "noise": SoundClass.NORMAL_TRAFFIC,
 }
 _MODELS = Path(__file__).resolve().parent / "models"
-# 실차 파인튜닝판(_early3)이 기본이다. 런타임 경로 실측(워밍업 틱 제외, 실차 17클립):
-#   지연 중앙 5.0초 → 2.0초 · 어제 네거티브 클립 45/49 → 10/49 · 오늘밤 음악 12/12 → 3/12
-#   사이렌 놓침 0/17 유지. 지연과 오경보가 함께 줄었다 (docs/collect/latency.md).
+# 실차 파인튜닝판(_early4)이 기본이다. 런타임 경로 실측(워밍업 제외, 실차 사이렌 17클립):
+#            실차지연  ★조기검출  어제오탐   8/12밤오탐  놓침
+#   구모델      5.0초     6.8%    44/49      5/59     0/17
+#   early3      2.0초    86.4%    11/49     46/59     0/17
+#   early4      2.0초    81.4%    13/49      9/59     0/17   ← 기본
+# early3 이 8/12 밤 현장에서 46/59 오탐을 냈고(같은 장소·같은 조건), 그 클립들을
+# 네거티브로 학습해 9/59 로 줄인 것이 early4 다. 지연·놓침은 그대로.
+# ⚠ '8/12밤 오탐'은 early3 가 울려 수집된 클립이라 early3 에겐 순환(불리), early4 엔
+#   학습셋(유리)이다. 공평한 잣대는 '어제 오탐'이고 거기선 11→13 으로 소폭 나빠졌다.
 # 구모델로 즉시 되돌리려면 ESA_DETECT_MODEL=cnn_attn_full_s42.onnx 로 실행한다.
-_MODEL_PATH = _MODELS / os.environ.get("ESA_DETECT_MODEL", "cnn_attn_full_s42_early3.onnx")
+_MODEL_PATH = _MODELS / os.environ.get("ESA_DETECT_MODEL", "cnn_attn_full_s42_early4.onnx")
 
 # ── 차종(사이렌 세분화) — ViT subtype_clf 모델 (선택) ────────────────
 # 검출과 입력(64×216 멜)·정규화가 동일 → 같은 윈도우를 그대로 재사용한다.
@@ -68,7 +74,7 @@ _SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural_dir.onn
 # ── 2초 예비검출 (석우 이중 창 — 같은 가중치, 창만 87프레임) ────────────
 # 5초 확정보다 먼저 우는 "빠른 귀" (PRE 예비경보 ~1.8s). 없으면 이중 창 생략.
 _FAST_PATH = _MODELS / (
-    "cnn_attn_full_s42_early3_87f.onnx"
+    "cnn_attn_full_s42_early4_87f.onnx"
     if _MODEL_PATH.name.startswith("cnn_attn_full_s42_early")
     else "cnn_attn_full_s42_87f.onnx")     # 예비 창은 확정 창과 같은 가중치를 쓴다
 FAST_FRAMES = 87
