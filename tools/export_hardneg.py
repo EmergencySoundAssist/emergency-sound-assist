@@ -167,7 +167,11 @@ def main(argv=None) -> int:
     for r in rows:
         rec = dict(wav=r["_wav"], session=r["_session"], clip=r["clip"],
                    human_label=r["label"], trigger=r["trigger"],
-                   duration_sec=float(r["duration_sec"]))
+                   duration_sec=float(r["duration_sec"]),
+                   # 프리롤 = 검출기가 울리기 전 구간. 사이렌 클립에서 사람 온셋과
+                   # 이 경계 사이가 곧 '들리는데 검출기가 침묵한' 구간이다 —
+                   # 지연의 정체이자 가장 값진 학습 재료(→ docs/collect/latency.md).
+                   pre_roll_sec=float(r["pre_roll_sec"]))
         rv = review.get((r["_session"], r["clip"]))
         if rv is not None:
             # 청취 확정본이 이긴다. 스크린은 '사람이 못 들어본 것'을 위한 대리
