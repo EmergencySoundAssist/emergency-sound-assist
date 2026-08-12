@@ -42,10 +42,11 @@ _TO_SOUNDCLASS = {                             # 학습 클래스 → core.types
     "noise": SoundClass.NORMAL_TRAFFIC,
 }
 _MODELS = Path(__file__).resolve().parent / "models"
-# 실차 파인튜닝판(_early)이 기본이다 — 사이렌이 들리기 시작하고 화면에 뜨기까지가
-# 중앙 5.0초→1.1초로 줄었다(실차 17클립, docs/collect/latency.md). 구모델로 즉시
-# 되돌리려면 ESA_DETECT_MODEL=cnn_attn_full_s42.onnx 로 실행하면 된다.
-_MODEL_PATH = _MODELS / os.environ.get("ESA_DETECT_MODEL", "cnn_attn_full_s42_early.onnx")
+# 실차 파인튜닝판(_early2)이 기본이다. 런타임 경로 실측(워밍업 틱 제외, 실차 17클립):
+#   지연 중앙 5.0초 → 2.0초 · 네거티브 오발화 14.7% → 9.0%(클립 45/49 → 16/49)
+#   사이렌 놓침 0/17 유지. 지연과 오경보가 함께 줄었다 (docs/collect/latency.md).
+# 구모델로 즉시 되돌리려면 ESA_DETECT_MODEL=cnn_attn_full_s42.onnx 로 실행한다.
+_MODEL_PATH = _MODELS / os.environ.get("ESA_DETECT_MODEL", "cnn_attn_full_s42_early2.onnx")
 
 # ── 차종(사이렌 세분화) — ViT subtype_clf 모델 (선택) ────────────────
 # 검출과 입력(64×216 멜)·정규화가 동일 → 같은 윈도우를 그대로 재사용한다.
@@ -67,7 +68,7 @@ _SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural_dir.onn
 # ── 2초 예비검출 (석우 이중 창 — 같은 가중치, 창만 87프레임) ────────────
 # 5초 확정보다 먼저 우는 "빠른 귀" (PRE 예비경보 ~1.8s). 없으면 이중 창 생략.
 _FAST_PATH = _MODELS / (
-    "cnn_attn_full_s42_early_87f.onnx"
+    "cnn_attn_full_s42_early2_87f.onnx"
     if _MODEL_PATH.name.startswith("cnn_attn_full_s42_early")
     else "cnn_attn_full_s42_87f.onnx")     # 예비 창은 확정 창과 같은 가중치를 쓴다
 FAST_FRAMES = 87
