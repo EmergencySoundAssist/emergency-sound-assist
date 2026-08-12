@@ -77,11 +77,45 @@ def test_auto_clip_includes_preroll_and_tail(tmp_path):
     assert r["det_flags"] == "111100"   # 트리거 틱부터: 사이렌 4 + 꼬리 2
 
 
-def test_horn_does_not_trigger(tmp_path):
+def test_horn_also_triggers_and_is_marked_apart(tmp_path):
+    """경적도 긴급으로 HUD 를 띄우므로 같이 모은다 — 안 모으면 경적 쪽 지연·오검출은
+    데이터가 없어 분석 자체가 불가능하다(1차 수집에서 실제로 그랬다).
+    다만 무엇이 클립을 열었는지는 trigger_class 로 갈라 둔다."""
     c = _mk(tmp_path)
-    _feed(c, 5, _horn)
+    _feed(c, 3, _horn)
+    assert c.status()["recording"] == "auto"
+    _feed(c, 2, _noise)
+    r = _rows(c)[0]
+    assert r["trigger_class"] == "horn"
+    assert r["det_flags"] == "00000"        # 사이렌 판정은 한 번도 없었다
+    assert r["horn_flags"] == "11100"       # 경적은 트리거 틱부터 3틱
+    assert r["label"] == LABEL_UNLABELED    # 라벨은 사람이 붙인다
+
+
+def test_siren_trigger_is_marked_as_siren(tmp_path):
+    c = _mk(tmp_path)
+    _feed(c, 2, _siren)
+    _feed(c, 2, _noise)
+    r = _rows(c)[0]
+    assert r["trigger_class"] == "siren"
+    assert r["det_flags"] == "1100"
+
+
+def test_horn_label_never_opens_a_manual_clip(tmp_path):
+    """'경적이었다'는 도장이지 새로 녹음할 소리가 아니다."""
+    c = _mk(tmp_path)
+    _feed(c, 3, _noise)
+    c.on_label("horn")
     assert c.status()["recording"] is None
     assert _rows(c) == []
+
+
+def test_horn_label_stamps_the_previous_clip(tmp_path):
+    c = _mk(tmp_path)
+    _feed(c, 3, _horn)
+    _feed(c, 2, _noise)                 # unlabeled 로 닫힘
+    c.on_label("horn")
+    assert _rows(c)[0]["label"] == "horn"
 
 
 def test_debounce_gap_does_not_split_clip(tmp_path):
@@ -325,7 +359,7 @@ def test_collect_button_rects_fit_and_do_not_overlap():
 
     for w, h in ((1280, 360), (800, 480), (320, 180)):
         rects = collect_button_rects(w, h)
-        assert len(rects) == 5
+        assert len(rects) == 6
         for x, y, bw, bh in rects:
             assert 0 <= x and x + bw <= w
             assert 0 <= y and y + bh <= h

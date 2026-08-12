@@ -251,7 +251,7 @@ def arc_bounds(center_deg: float, half: float = ARC_HALF_DEG):
 # 앞 4개는 tools/tag_siren.py 의 키 배열(1 구급 · 2 경찰 · 3 소방 · u 모름)과 같고,
 # not_siren(N)은 오검출 확인용 — 검출이 울렸는데 사이렌이 아니었을 때 누른다
 # (검출기 hard-negative 수집 + 미라벨 클립이 다음 라벨을 흡수하는 것 방지).
-COLLECT_ORDER = ("ambulance", "police", "fire", "unknown", "not_siren")
+COLLECT_ORDER = ("ambulance", "police", "fire", "unknown", "horn", "not_siren")
 
 
 def collect_button_rects(w: int, h: int) -> List[Tuple[int, int, int, int]]:

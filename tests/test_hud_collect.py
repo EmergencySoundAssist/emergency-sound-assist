@@ -39,9 +39,9 @@ def test_overlay_draws_in_all_states_and_exposes_buttons():
     surf = pygame.Surface((1280, 360))
     r = Renderer(HudConfig(width=1280, height=360))
     r.draw(surf, None, collect=_FakeCollector().status())           # 대기 화면에도 버튼
-    assert len(r.collect_buttons) == 5
+    assert len(r.collect_buttons) == 6
     r.draw(surf, None, collect=_FakeCollector("auto", "fire").status())
-    assert len(r.collect_buttons) == 5
+    assert len(r.collect_buttons) == 6
     r.draw(surf, None)                                              # 수집 없으면 버튼 없음
     assert r.collect_buttons == []
     pygame.quit()

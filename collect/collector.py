@@ -46,7 +46,8 @@ import numpy as np
 from core.types import AudioChunk, ClassResult, SirenSubtype, SoundClass
 
 LABEL_UNLABELED = "unlabeled"
-LABEL_NOT_SIREN = "not_siren"     # 오검출 확인 — 검출은 울렸는데 사이렌이 아니었음
+LABEL_NOT_SIREN = "not_siren"     # 오검출 확인 — 검출은 울렸는데 사이렌도 경적도 아니었음
+LABEL_HORN = "horn"               # 경적 — 사이렌과 함께 긴급으로 HUD 를 띄우는 클래스
 
 # HUD 피드백 문구용 (수집기는 화면에 낼 문구까지 만든다 — HUD 는 그대로 그린다)
 _KO = {
@@ -54,6 +55,7 @@ _KO = {
     SirenSubtype.POLICE.value: "경찰차",
     SirenSubtype.FIRE.value: "소방차",
     SirenSubtype.UNKNOWN.value: "차종모름",
+    LABEL_HORN: "경적",
     LABEL_NOT_SIREN: "사이렌아님",
 }
 
@@ -132,6 +134,9 @@ class SirenCollector:
         """매 틱(1초 청크) 호출. **디바운스 전(raw)** 분류 결과를 받는다."""
         mono = _channel0(chunk)
         siren = bool(cls.is_emergency and cls.label is SoundClass.SIREN)
+        # 경적도 긴급으로 HUD 를 띄우므로 같이 모은다. 안 모으면 경적 쪽 지연·오검출은
+        # 데이터가 없어 분석 자체가 불가능하다(1차 수집에서 실제로 그랬다).
+        horn = bool(cls.is_emergency and cls.label is SoundClass.HORN)
         with self._lock:
             if self._closed:
                 return
@@ -142,14 +147,18 @@ class SirenCollector:
 
             if self._clip is None:
                 self._ring_push(mono, dur)
-                if siren:
-                    self._open_clip(trigger="auto", label=LABEL_UNLABELED, cls=cls)
+                if siren or horn:
+                    # 사이렌·경적 어느 쪽이든 클립을 연다. 무엇이 열었는지는
+                    # trigger_class 로 남겨, 나중에 두 문제를 갈라서 볼 수 있게 한다.
+                    self._open_clip(trigger="auto", label=LABEL_UNLABELED, cls=cls,
+                                    trigger_class="siren" if siren else "horn")
                 return
 
             c = self._clip
             c["frames"].append(mono)
             c["samples"] += mono.size
             c["flags"].append(siren)
+            c["horn_flags"].append(horn)
             if siren:
                 c["last_siren"] = self._clip_sec(c)
                 if cls.confidence > c["conf_max"]:
@@ -157,6 +166,10 @@ class SirenCollector:
                 sc = cls.subtype_confidence or 0.0
                 if cls.subtype is not None and sc >= c["model_sub_conf"]:
                     c["model_subtype"], c["model_sub_conf"] = cls.subtype.value, sc
+            if horn:
+                c["last_siren"] = self._clip_sec(c)     # 경적도 클립을 살려 둔다
+                if cls.confidence > c["conf_max"]:
+                    c["conf_max"] = cls.confidence
 
             sec = self._clip_sec(c)
             over = sec >= self._max_sec
@@ -204,8 +217,10 @@ class SirenCollector:
                 c["label"] = label
                 self._say(f"라벨 ✓ {ko} (녹음 중 클립)")
                 return
-            if label == LABEL_NOT_SIREN:
-                self._say("사이렌아님: 대상 클립 없음")
+            if label in (LABEL_NOT_SIREN, LABEL_HORN):
+                # 둘 다 '지금 들리는 사이렌을 새로 녹음한다'는 뜻이 아니다.
+                # not_siren=오검출 도장, horn=경적 확인 — 대상 클립이 없으면 할 일이 없다.
+                self._say(f"{ko}: 대상 클립 없음")
                 return
             self._open_clip(trigger="manual", label=label, cls=None)
             self._say(f"수동 녹음 ● {ko} — 미검출 표본")
@@ -289,7 +304,8 @@ class SirenCollector:
                and self._ring_sec - dur - self._ring[0].size / sr >= self._pre_roll):
             self._ring_sec -= self._ring.popleft().size / sr
 
-    def _open_clip(self, trigger: str, label: str, cls: Optional[ClassResult]) -> None:
+    def _open_clip(self, trigger: str, label: str, cls: Optional[ClassResult],
+                   trigger_class: str = "") -> None:
         """링버퍼 전체를 머리에 넣고 클립을 연다. 링은 비운다(클립과 중복 저장 방지).
 
         자동 트리거: 링 마지막 원소가 방금 판정난 청크다 → pre_roll 은 그 앞까지.
@@ -306,7 +322,9 @@ class SirenCollector:
             "frames": frames,
             "samples": samples,
             # det_flags 는 트리거 틱부터 기록한다 (프리롤 틱들의 판정은 링에 없다)
-            "flags": [True] if trigger == "auto" else [],
+            "flags": [trigger_class == "siren"] if trigger == "auto" else [],
+            "horn_flags": [trigger_class == "horn"] if trigger == "auto" else [],
+            "trigger_class": trigger_class,
             "presses": [],                    # 녹음 중 눌린 (클립 내 초, 라벨)
             "pre_roll": samples / sr - cur,
             "last_siren": samples / sr,       # 트리거 시점 = 마지막 사이렌 관측
@@ -333,6 +351,8 @@ class SirenCollector:
             "pre_roll_sec": round(c["pre_roll"], 1),
             "duration_sec": round(c["samples"] / self._sr, 1),
             "det_flags": "".join("1" if f else "0" for f in c["flags"]),
+            "horn_flags": "".join("1" if f else "0" for f in c["horn_flags"]),
+            "trigger_class": c["trigger_class"],
             "det_conf_max": round(c["conf_max"], 3),
             "model_subtype": c["model_subtype"],
             "model_sub_conf": round(c["model_sub_conf"], 3),
@@ -353,8 +373,9 @@ class SirenCollector:
 
     def _write_csv(self) -> None:
         """임시파일 + 원자 교체. 종료 동결·크래시가 반쯤 쓴 labels.csv 를 남기지 않게."""
-        cols = ["clip", "label", "trigger", "t_wall", "pre_roll_sec", "duration_sec",
-                "det_flags", "det_conf_max", "model_subtype", "model_sub_conf", "presses"]
+        cols = ["clip", "label", "trigger", "trigger_class", "t_wall", "pre_roll_sec",
+                "duration_sec", "det_flags", "horn_flags", "det_conf_max",
+                "model_subtype", "model_sub_conf", "presses"]
         path = self.session / "labels.csv"
         tmp = self.session / "labels.csv.tmp"
         with tmp.open("w", encoding="utf-8", newline="") as f:

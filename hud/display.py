@@ -23,6 +23,7 @@ for _keys, _label in (
     (("K_2", "K_KP2"), "police"),
     (("K_3", "K_KP3"), "fire"),
     (("K_u", "K_0", "K_KP0"), "unknown"),
+    (("K_h", "K_4", "K_KP4"), "horn"),
     (("K_n",), "not_siren"),
 ):
     for _k in _keys:
