@@ -51,3 +51,5 @@ outputs/
 *.swp
 .DS_Store
 Thumbs.db
+!classifier/models/cnn_attn_full_s42_early.onnx
+!classifier/models/cnn_attn_full_s42_early_87f.onnx
