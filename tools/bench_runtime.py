@@ -105,7 +105,7 @@ def _tick_labels(y: np.ndarray, grid: float, gate=None) -> list[tuple[float, boo
         if gate is None:
             fire = r["label"] in (SoundClass.SIREN, SoundClass.HORN)
         else:
-            fire = gate.step(r["m_siren"], r["m_horn"])
+            fire = gate.step(*CI.gate_margins(r))   # 런타임과 같은 함수
         out.append((t, fire))
     return out
 
@@ -219,13 +219,11 @@ def main(argv=None) -> int:
         for g in a.grid:
             print(run(g, pairs, negs, load16).line(f"격자 {g:.2f}s"))
         return 0
-    from dataclasses import replace as _rep
-    from pipeline.gate import EmergencyGate, SIREN, HORN
+    from pipeline.gate import EmergencyGate, SIREN, configs_for
     taus = a.tau_on if a.tau_on else [SIREN.tau_on]
     for g in a.grid:
         for tau in taus:
-            sc = _rep(SIREN, tau_on=tau, tau_off=min(SIREN.tau_off, tau - 0.4))
-            hc = _rep(HORN, tau_on=max(tau, 1.0))
+            sc, hc = configs_for(tau)          # 런타임(classifier.inference)과 같은 코드
             gf = lambda dt, sc=sc, hc=hc: EmergencyGate(dt, siren=sc, horn=hc)
             print(run(g, pairs, negs, load16, gate_factory=gf)
                   .line(f"격자 {g:.2f}s τ={tau:+.1f}"))

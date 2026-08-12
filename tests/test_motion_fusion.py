@@ -49,6 +49,8 @@ def test_model_waits_for_a_real_five_second_window():
 
 
 def test_standalone_classifier_includes_subtype(monkeypatch):
+    import classifier.inference as CI
+    monkeypatch.setattr(CI, "GATE_ON", False)     # argmax 경로 계약 (게이트 경로는 별도 테스트)
     classifier = _OnnxClassifier()
     classifier._last_x = np.zeros((1, 1, 64, 216), dtype=np.float32)
     monkeypatch.setattr(

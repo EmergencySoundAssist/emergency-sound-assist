@@ -27,7 +27,7 @@ Airacle deploy 런타임이 stride 0.15초로 돌 수 있는 이유가 여기 �
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -96,3 +96,18 @@ class EmergencyGate:
     def reset(self) -> None:
         self.siren.reset()
         self.horn.reset()
+
+
+def configs_for(tau_on: float) -> tuple[GateConfig, GateConfig]:
+    """켜기 임계 하나로 (사이렌, 경적) 설정을 만든다 — 벤치와 런타임이 **같은 코드**를 쓴다.
+
+    따로 두면 갈라진다: 실제로 한 번 갈라져서, 벤치는 tau_off=tau-0.4·경적 max(tau,1.0)
+    으로 재고 런타임은 tau_off=min(0.5,tau)·경적 2.5 로 돌 뻔했다 — 재본 적 없는 설정을
+    배포하는 셈이다.
+
+    tau_off 를 tau_on-0.4 로 두는 이유: 히스테리시스 폭을 임계와 함께 움직여야 임계를
+    낮췄을 때 켜기·끄기가 붙어버리지 않는다. 경적은 사이렌보다 오탐이 비싸(짧고 잦다)
+    바닥 1.0 을 둔다.
+    """
+    return (replace(SIREN, tau_on=tau_on, tau_off=min(SIREN.tau_off, tau_on - 0.4)),
+            replace(HORN, tau_on=max(tau_on, 1.0)))

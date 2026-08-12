@@ -51,6 +51,17 @@ class SubtypeVote:
         if float(probs[i]) >= conf:
             self.votes.append(i)
 
+    def winner(self) -> tuple[int | None, int, int]:
+        """(다수 클래스 idx, 그 표수, 전체 유효표) — 유효표가 없으면 (None, 0, 0).
+
+        문자열 label() 과 **같은 집계**를 쓴다. HUD 는 enum 이 필요하고 콘솔은 문자열이
+        필요한데, 집계를 두 벌 두면 화면과 로그가 서로 다른 차종을 말하게 된다.
+        """
+        if not self.votes:
+            return None, 0, 0
+        i, c = Counter(self.votes).most_common(1)[0]
+        return i, c, len(self.votes)
+
     def label(self) -> str:
         if not self.votes:                           # 유효 투표 0 → 세분화 보류
             return f"긴급차량({self.n_seen}tick)"

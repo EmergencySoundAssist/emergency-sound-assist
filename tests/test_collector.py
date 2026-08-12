@@ -396,6 +396,7 @@ def test_infer_uses_fast_window_for_horn_only(monkeypatch):
     import classifier.inference as CI
     from core.types import SoundClass
 
+    monkeypatch.setattr(CI, "GATE_ON", False)     # 여기서 재는 건 argmax 경로다
     def fake(res):
         monkeypatch.setattr(CI._CLF, "analyze", lambda chunk: res)
         return CI._CLF.infer(_chunk())
@@ -422,3 +423,29 @@ def test_infer_uses_fast_window_for_horn_only(monkeypatch):
     r = fake({"label": SoundClass.NORMAL_TRAFFIC, "conf": 0.7,
               "m_siren": -3.0, "m_horn": -1.0, "m_fast": None, "fast_label": None})
     assert r.label is SoundClass.NORMAL_TRAFFIC
+
+
+def test_gated_path_still_hears_short_horns(monkeypatch):
+    """게이트 경로도 경적 2초 창을 봐야 한다.
+
+    게이트는 마진으로만 판정하는데, 5초 마진만 넣으면 짧은 경적(중앙 2.8초)이
+    통째로 사라진다 — argmax 경로에만 있던 2초 창 승격이 게이트를 켜는 순간
+    조용히 없어지는 것이다. gate_margins() 가 그걸 막는다.
+    """
+    import classifier.inference as CI
+    from core.types import SoundClass
+
+    # 5초 창은 경적을 못 듣고(-3.0), 2초 창은 확실히 듣는다(+2.0)
+    res = {"label": SoundClass.NORMAL_TRAFFIC, "conf": 0.7, "m_siren": -4.0,
+           "m_horn": -3.0, "m_fast": -2.0, "m_fast_horn": 2.0,
+           "fast_label": SoundClass.HORN}
+    assert CI.gate_margins(res) == (-4.0, 2.0)          # 경적은 큰 쪽을 쓴다
+
+    monkeypatch.setattr(CI, "GATE_ON", True)
+    monkeypatch.setattr(CI._CLF, "analyze", lambda chunk: res)
+    CI._CLF.reset()
+    labels = [CI._CLF.infer(_chunk()).label for _ in range(6)]
+    assert SoundClass.HORN in labels
+
+    # 2초 창이 없으면(구버전 analyze) 5초 마진만 쓴다 — 예외 없이 동작해야 한다
+    assert CI.gate_margins({"m_siren": 1.0, "m_horn": -1.0}) == (1.0, -1.0)

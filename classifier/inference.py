@@ -51,7 +51,17 @@ _MODELS = Path(__file__).resolve().parent / "models"
 # 네거티브로 학습해 9/59 로 줄인 것이 early4 다. 지연·놓침은 그대로.
 # ⚠ '8/12밤 오탐'은 early3 가 울려 수집된 클립이라 early3 에겐 순환(불리), early4 엔
 #   학습셋(유리)이다. 공평한 잣대는 '어제 오탐'이고 거기선 11→13 으로 소폭 나빠졌다.
-# 구모델로 즉시 되돌리려면 ESA_DETECT_MODEL=cnn_attn_full_s42.onnx 로 실행한다.
+# rc5 는 여기서 한 걸음 더 간다 — 실차 사이렌이 19개뿐인 게 병목이라, 그 19개로 **채널만
+# 실측해**(realchannel.npz: 사이렌 대역 EQ -2.63, 실차 소음 32분) AI-Hub 사이렌 2,239개에
+# 입혔다. 라벨은 AI-Hub 에서, 채널은 실차에서 가져오는 셈이다.
+# 대조군(ctl5 = 같은 레시피, 채널만 뺌)과 비교하면 게이트 지점마다 지연·오탐 양쪽을 이긴다:
+#   0.25초 격자 τ=+0.4 →  ctl5 3.50초 / 오탐 13클립   vs   rc5 2.88초 / 오탐 8클립
+# ⚠ 근거의 한계: 벤치 양성은 AI-Hub(실차 아님)이고, 네거티브 142클립은 두 모델 다
+#   학습에 본 것이라 절대값은 낙관적이다. 실차 사이렌 19개 k-fold(제대로 홀드아웃)에서는
+#   조기검출 틱이 오히려 72.6%→70.1% 로 조금 내려갔다(오발화는 3.7%→3.2%). 부호가 갈린다.
+# rc5 는 **아직 기본이 아니다** — 현장 재검증 전이다. 켜려면 게이트·격자와 셋을 같이:
+#   ESA_DETECT_MODEL=cnn_attn_full_s42_rc5.onnx ESA_GATE=1  (+ CHUNK_SECONDS=0.25)
+# 구모델로 되돌리려면 ESA_DETECT_MODEL=cnn_attn_full_s42.onnx 로 실행한다.
 _MODEL_PATH = _MODELS / os.environ.get("ESA_DETECT_MODEL", "cnn_attn_full_s42_early4.onnx")
 
 # ── 차종(사이렌 세분화) — ViT subtype_clf 모델 (선택) ────────────────
@@ -73,11 +83,42 @@ _SPEED_PATH = Path(__file__).resolve().parent / "models" / "speed_neural_dir.onn
 
 # ── 2초 예비검출 (석우 이중 창 — 같은 가중치, 창만 87프레임) ────────────
 # 5초 확정보다 먼저 우는 "빠른 귀" (PRE 예비경보 ~1.8s). 없으면 이중 창 생략.
-_FAST_PATH = _MODELS / (
-    "cnn_attn_full_s42_early4_87f.onnx"
-    if _MODEL_PATH.name.startswith("cnn_attn_full_s42_early")
-    else "cnn_attn_full_s42_87f.onnx")     # 예비 창은 확정 창과 같은 가중치를 쓴다
+# 예비 창은 확정 창과 **같은 가중치**여야 한다. 검출 모델 이름에서 87프레임 판을
+# 유도하고, 없으면 기본판으로 떨어진다. (하드코딩하면 새 모델을 ESA_DETECT_MODEL 로
+# 물렸을 때 5초 창만 새것 · 2초 창은 옛것이 되어 두 창이 서로 다른 모델이 된다.)
+def _fast_path_for(detect: Path) -> Path:
+    sibling = detect.with_name(detect.stem + "_87f.onnx")
+    return sibling if sibling.exists() else _MODELS / "cnn_attn_full_s42_87f.onnx"
+
+
+_FAST_PATH = _fast_path_for(_MODEL_PATH)
 FAST_FRAMES = 87
+
+# ── 마진 게이트 (선택) ────────────────────────────────────────────────
+# argmax(마진>0) 대신 pipeline.gate 의 히스테리시스+투표+hangover 로 판정한다.
+# CHUNK_SECONDS=0.25 와 **짝**이다 — 굵은 격자에서는 투표창이 1틱으로 붕괴해 게이트가
+# 단순 임계로 전락하고, 게이트 없는 촘촘한 격자는 오탐이 폭증한다(현장에서 겪었다).
+# τ=+0.4 를 고른 이유: 현재 배포 지점(1.0초 격자·게이트 없음 = 지연 3.00초/오탐 22클립)을
+# **양쪽 축에서** 이기는 구간(τ=0.0~0.4) 중 오탐이 가장 낮은 끝이다 → 2.75초 / 12클립.
+# 기본은 꺼짐 — 현장 재검증 전이다. ESA_GATE=1 로 켜고, 켤 때는 CHUNK_SECONDS=0.25 와 함께.
+GATE_ON = os.environ.get("ESA_GATE", "0") not in ("0", "false", "False")
+GATE_TAU_ON = float(os.environ.get("ESA_GATE_TAU_ON", "0.4"))
+
+
+def gate_margins(res) -> tuple[float, float]:
+    """analyze() 결과 → 게이트에 넣을 (사이렌, 경적) 마진.
+
+    경적은 5초 창과 2초 창 중 **큰 쪽**을 쓴다. 경적은 AI-Hub 기준 중앙 2.8초라
+    5초 창에서는 창을 절반도 못 채우고 창 단위 정규화가 그마저 희석한다 —
+    5초 마진만 보면 늦게 뜨는 게 아니라 아예 놓친다(실측 43/57 → 52/57).
+    사이렌은 2초 창을 열면 오탐만 늘고 지연은 그대로라(11→23/49) 열지 않는다.
+
+    벤치(tools/bench_runtime.py)와 런타임이 **같은 함수**를 부른다 — 따로 두면
+    재본 적 없는 규칙을 배포하게 된다.
+    """
+    fh = res.get("m_fast_horn")
+    m_horn = res["m_horn"] if fh is None else max(res["m_horn"], fh)
+    return res["m_siren"], m_horn
 
 
 @dataclass(frozen=True)
@@ -170,6 +211,8 @@ class _OnnxClassifier:
         self._fast_in = None
         self._fast_unavailable = False       # 예비검출(87f) 없음 확인 후 재시도 방지
         self._last_x = None                  # analyze()의 정규화 5초 창 — 차종/속도가 재사용
+        self._gate = None                    # 마진 게이트 (ESA_GATE=1 일 때만)
+        self._gate_dt = 0.0                  # 게이트를 만든 청크 간격(초)
 
     def _session(self):
         if self._sess is None:
@@ -244,6 +287,8 @@ class _OnnxClassifier:
         self._buf = np.zeros(0, dtype=np.float32)
         self._buf_in = np.zeros(0, dtype=np.float32)
         self._last_x = None
+        if self._gate is not None:
+            self._gate.reset()      # 클립 경계에서 hangover 가 넘어가면 오프라인 재생이 오염된다
 
     # ── 하이브리드 API — 마진 판정 + 창 재사용 (석우 infer_trt.step 방식) ──
     def analyze(self, chunk: AudioChunk):
@@ -280,18 +325,22 @@ class _OnnxClassifier:
         i = int(prob.argmax())
 
         m_fast = None
+        m_fast_horn = None
         fast_label = None
         fs = self._fast_session()
         if fs is not None:                        # 예비: 같은 멜의 끝 2초만, 별도 정규화
             xf = np.ascontiguousarray(_norm_win(m[:, -FAST_FRAMES:])[None, None], dtype=np.float32)
             zf = fs.run(None, {self._fast_in: xf})[0][0]
             m_fast = float(zf[0] - max(zf[1], zf[2]))
+            # 경적 마진도 같이 낸다 — 게이트는 마진으로만 판정하는데, 경적은 5초 창에서
+            # 창의 절반도 못 채워(중앙 2.8초) 5초 마진만 보면 **아예 놓친다**.
+            m_fast_horn = float(zf[1] - max(zf[0], zf[2]))
             fast_label = _TO_SOUNDCLASS[CLASSES[int(np.argmax(zf))]]
 
         self._last_x = x
         return {"label": _TO_SOUNDCLASS[CLASSES[i]], "conf": float(prob[i]),
                 "m_siren": m_siren, "m_horn": m_horn, "m_fast": m_fast,
-                "fast_label": fast_label}
+                "m_fast_horn": m_fast_horn, "fast_label": fast_label}
 
     def subtype_probs(self):
         """마지막 analyze 창 → 차종 softmax 확률[3] (yt 파인튜닝판). 모델 없으면 None.
@@ -348,6 +397,8 @@ class _OnnxClassifier:
         res = self.analyze(chunk)
         if res is None:
             return ClassResult.from_label(SoundClass.NORMAL_TRAFFIC, 0.0)
+        if GATE_ON:
+            return self._gated(res, chunk)
         if (res["label"] is SoundClass.NORMAL_TRAFFIC
                 and res.get("fast_label") is SoundClass.HORN):
             return ClassResult.from_label(SoundClass.HORN, res["conf"])
@@ -360,6 +411,34 @@ class _OnnxClassifier:
             subtype=subtype,
             subtype_confidence=subtype_confidence,
         )
+
+    def _gated(self, res, chunk: AudioChunk) -> ClassResult:
+        """마진 게이트로 판정한다 — argmax(마진>0) 대신 켜기 어렵게·끄기 느리게.
+
+        게이트의 시간상수는 **초**라, 청크 간격이 바뀌면 틱 수로 다시 환산해야 한다.
+        간격이 달라지면 게이트를 새로 만든다(중간에 격자를 바꿔도 실효 동작 유지).
+
+        사이렌/경적 중 어느 쪽이 켰는지로 라벨을 정한다. 게이트가 꺼져 있으면 마진과
+        무관하게 '일반 도로 소음' — 고립된 튐이 경보로 새지 않는다.
+        """
+        dt = len(chunk.samples) / float(chunk.sample_rate or 1)
+        if self._gate is None or abs(dt - self._gate_dt) > 1e-6:
+            from pipeline.gate import EmergencyGate, configs_for
+            sc, hc = configs_for(GATE_TAU_ON)    # 벤치(tools/bench_runtime.py)와 같은 코드
+            self._gate = EmergencyGate(dt, siren=sc, horn=hc)
+            self._gate_dt = dt
+        on = self._gate.step(*gate_margins(res))
+        if not on:
+            return ClassResult.from_label(SoundClass.NORMAL_TRAFFIC, res["conf"])
+        siren = self._gate.siren.on
+        if not siren:
+            return ClassResult.from_label(SoundClass.HORN, res["conf"])
+        subtype = subtype_confidence = None
+        if self._last_x is not None:
+            subtype, subtype_confidence = self._infer_subtype(self._last_x)
+        return ClassResult.from_label(SoundClass.SIREN, res["conf"],
+                                      subtype=subtype,
+                                      subtype_confidence=subtype_confidence)
 
 
 _CLF = _OnnxClassifier()

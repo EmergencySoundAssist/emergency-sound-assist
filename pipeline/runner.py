@@ -40,11 +40,14 @@ from core.types import (
     SpeechResult,
     Direction,
     Motion,
+    SirenSubtype,
+    SoundClass,
 )
 from classifier import infer as classify
-from classifier.inference import speed_evidence   # 패키지는 infer 만 재노출한다
+from classifier.inference import SUBTYPE_CONF, speed_evidence   # 패키지는 infer 만 재노출한다
 from doa.estimator import estimate_direction
 from approach.detector import ApproachDetector
+from pipeline.alert import SubtypeVote
 from pipeline.caption_gate import CaptionGate
 from pipeline.motion_fusion import ConditionalMotionFusion
 
@@ -60,9 +63,14 @@ class Pipeline:
         self,
         stt_worker: Optional["object"] = None,
         hold_seconds: float = 3.0,
-        emergency_hangover: float = 2.0,
+        emergency_hangover: Optional[float] = None,
         clock=None,
     ) -> None:
+        # 게이트가 켜져 있으면 잔향은 **게이트가 이미 한다**(t_hang=2.5초). 여기서 또
+        # 걸면 2.5+2.0=4.5초가 되어, 벤치(게이트만 잰 것)와 다른 동작을 배포하게 된다.
+        if emergency_hangover is None:
+            from classifier.inference import GATE_ON
+            emergency_hangover = 0.0 if GATE_ON else 2.0
         self._hangover = float(emergency_hangover)
         self._hold_until = 0.0
         self._last_emergency: Optional[ClassResult] = None
@@ -88,6 +96,7 @@ class Pipeline:
         self._tick_raw_acc: Optional[ClassResult] = None
         self._direction = DirectionResult(direction=Direction.UNKNOWN)
         self._approach_res = ApproachResult(motion=Motion.UNKNOWN)
+        self._sub_vote = SubtypeVote()           # 차종 시간 다수결 (떨림 억제)
 
     def process(self, chunk: AudioChunk) -> FusedResult:
         mono_chunk = _channel0(chunk)            # 분류·접근·STT 는 ch0(처리채널)만
@@ -95,7 +104,7 @@ class Pipeline:
         # 디바운스 전 원판정도 남긴다 — 수집기(collect)는 벽시계 잔향이 섞이지 않은
         # raw 를 써야 오디오 시간축과 일관된다(--wav 재수집은 실시간보다 빠르다).
         self.last_raw = classify(mono_chunk)     # ← 매 청크(0.25초 격자)
-        cls = self._debounce(self.last_raw)
+        cls = self._vote_subtype(self._debounce(self.last_raw))
         # 1초 틱의 대표 판정: 그 안에서 **가장 먼저 나온 긴급**을 남긴다. 수집기가
         # det_flags 를 1초 단위로 적으므로, 4조각 중 하나라도 울리면 그 틱은 울린 것이다.
         if self._tick_raw_acc is None or (
@@ -162,6 +171,37 @@ class Pipeline:
             return self._last_emergency
         self._last_emergency = None
         return raw
+
+    # 차종을 한 번이라도 이름 붙이려면 필요한 것: 유효표 최소 개수와, 그 안에서의 우세 비율.
+    # 낮게 잡으면 화면이 구급차↔경찰차로 떤다(현장 신고: "핸드폰으로 사이렌 틀면 차종이 튄다").
+    SUBTYPE_MIN_VOTES = 5
+    SUBTYPE_MAJORITY = 0.7
+    _SUBTYPE_ORDER = (SirenSubtype.AMBULANCE, SirenSubtype.POLICE, SirenSubtype.FIRE)
+
+    def _vote_subtype(self, cls: ClassResult) -> ClassResult:
+        """차종을 **시간 다수결**로 눌러 준다 — 창 하나의 추정을 그대로 그리지 않는다.
+
+        왜 필요한가: 검출이 빨라지면(early3/early4) 사이렌이 아직 멀고 약할 때부터
+        창마다 차종을 뽑는다. 그 창들에서 차종 확률은 근거가 거의 없어서 매 초 답이
+        바뀌고, 화면에는 구급차→경찰차→소방차로 떠는 것으로 보인다. 지연을 줄인 것이
+        차종 떨림을 **만든** 셈이다.
+
+        ⚠ 투표는 떨림만 없앤다. 정확도를 만들지는 못한다 — 실차 채널에서 차종 분류기는
+        8건 중 1건(균형정확도 50% = 정보 없음)이라, 표를 모아도 '안정적으로 틀린' 답이
+        될 수 있다. 그래서 기준을 높게(유효표 5개·우세 70%) 두고, 못 넘으면 UNKNOWN
+        (화면 '긴급차량')으로 둔다. 확신 없는 차종을 이름 붙여 말하지 않는 쪽이 낫다.
+        """
+        if not cls.is_emergency or cls.label is not SoundClass.SIREN:
+            self._sub_vote.reset()
+            return cls
+        if cls.subtype is not None and cls.subtype in self._SUBTYPE_ORDER:
+            probs = np.zeros(len(self._SUBTYPE_ORDER), dtype=np.float32)
+            probs[self._SUBTYPE_ORDER.index(cls.subtype)] = float(cls.subtype_confidence or 0.0)
+            self._sub_vote.add(probs, SUBTYPE_CONF)
+        i, c, n = self._sub_vote.winner()
+        if i is None or n < self.SUBTYPE_MIN_VOTES or c < self.SUBTYPE_MAJORITY * n:
+            return replace(cls, subtype=SirenSubtype.UNKNOWN, subtype_confidence=None)
+        return replace(cls, subtype=self._SUBTYPE_ORDER[i], subtype_confidence=c / n)
 
     def _fuse(self, acoustic: ApproachResult) -> ApproachResult:
         """음량 판단에 속도방향 모델과 직접 도플러를 조건부로 얹어 motion 을 확정한다.
