@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -35,9 +36,15 @@ SAMPLE_RATE = 16_000          # Hz. 음성/환경음 분류에서 일반적으�
 #   마진 게이트(classifier.inference)를 켜면 고립된 튐이 걸러진다 — 벤치 실측으로
 #   0.25초 격자 + 게이트 τ=+0.4 + rc5 모델이 현재 배포 지점을 양쪽 축에서 이긴다
 #   (3.00초/오탐 22클립 → 2.75초/오탐 12클립, 놓침 0/30).
-#   ⚠ 아직 기본값이 아니다 — 현장 재검증 전이라 켜는 건 아래 한 줄과 ESA_GATE=1 을
-#     **같이** 해야 한다. 게이트 없는 0.25초는 현장에서 이미 실패했다. 둘은 짝이다.
-CHUNK_SECONDS = 1.0
+#   ⚠ 아직 기본값이 아니다 — 현장 재검증 전이라 켜는 건 ESA_GATE=1 과 **같이** 해야
+#     한다. 게이트 없는 0.25초는 **주행 중에** 오탐이 폭증했다("계속 사이렌이래").
+#
+# ESA_CHUNK_SECONDS 로 덮어쓸 수 있다. 이게 없으면 문서가 시키는 ESA_GATE=1 을 켜도
+# 격자가 1.0초라 투표창이 1틱으로 붕괴해 게이트가 단순 임계로 전락한다 — 즉 env 로만
+# 조작하는 사람은 의도한 설정에 **도달할 수 없었다**.
+#   실내 시연(조용한 배경): 0.25초·게이트 없음이 사이렌 반응 3.00초 → 1.75초
+#     (AI-Hub 사이렌 25개·실내 배경 8종에서 배경 오발화 0/8). 주행에는 쓰지 말 것.
+CHUNK_SECONDS = float(os.environ.get("ESA_CHUNK_SECONDS", "1.0"))
 TICK_SECONDS = 1.0            # 무거운 모듈·기록이 쓰는 논리적 틱(초). 청크 여러 개를 묶는다.
 CHANNELS = 4                  # ReSpeaker XVF-3000 = 4채널. 분류는 보통 1채널로 다운믹스.
 
