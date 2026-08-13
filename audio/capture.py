@@ -151,6 +151,11 @@ def iter_chunks_threaded(source: Iterator, maxsize: int = 120) -> Iterator:
 
     q: "queue.Queue" = queue.Queue(maxsize=maxsize)
     sentinel = object()
+    # ★ 큐가 밀리면 경보가 '실제 소리보다 큐 깊이만큼' 늦게 뜬다. 그런데 화면만 보면
+    #   "검출이 느린 것"과 "재생이 밀린 것"이 똑같아 보인다 — 현장에서 "다 지나가고
+    #   뜬다"를 들었을 때 둘 중 무엇인지 가릴 근거가 없었다. 그래서 깊이를 찍어 둔다.
+    #   (Airacle deploy 는 링버퍼로 최신 5초만 떠 가서 이 문제가 구조적으로 없다.)
+    warned_at = 0
 
     def _producer():
         try:
@@ -163,6 +168,13 @@ def iter_chunks_threaded(source: Iterator, maxsize: int = 120) -> Iterator:
 
     threading.Thread(target=_producer, daemon=True).start()
     while True:
+        depth = q.qsize()
+        if depth > max(8, maxsize // 8) and depth >= warned_at * 2:
+            warned_at = depth
+            print(f"[audio] 경고: 캡처 큐 {depth}청크 밀림 — 경보가 그만큼 늦게 뜬다"
+                  " (소비자가 실시간보다 느림)", file=sys.stderr)
+        elif depth <= 2:
+            warned_at = 0
         item = q.get()
         if item is sentinel:
             break

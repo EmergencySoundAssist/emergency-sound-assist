@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import csv
 import os
+import queue
+import sys
 import threading
 import time
 import wave
@@ -121,6 +123,12 @@ class SirenCollector:
 
         self._lock = threading.Lock()
         self._closed = False
+        # 저장 워커 — wav 쓰기를 파이프라인 스레드에서 빼낸다(락 점유·큐 정체 방지).
+        # 큐를 짧게(4) 두는 이유: 여기 쌓인 만큼은 프로세스가 강제 종료되면 사라지는
+        # 데이터다. 길게 두면 손실 위험만 커지고 얻는 게 없다.
+        self._writeq: "queue.Queue" = queue.Queue(maxsize=4)
+        self._writer = threading.Thread(target=self._writer_loop, daemon=True)
+        self._writer.start()
         self._sr: Optional[int] = None        # 첫 청크에서 확정
         self._pos = 0.0                       # 지금까지 흘러간 오디오(초) — 내부 시간축
         self._ring: deque[np.ndarray] = deque()
@@ -190,6 +198,26 @@ class SirenCollector:
                 done = sec - c["pre_roll"] >= self._manual_sec and not siren
             if done or over:
                 self._close_clip()
+
+    # ── 저장 워커 ───────────────────────────────────────────────────────
+
+    def _enqueue_write(self, path, samples) -> None:
+        """wav 한 개를 저장 큐에 넣는다. 큐가 가득 차면 여기서 기다린다 —
+        데이터를 버리느니 잠깐 미는 쪽이 낫다(수집이 목적인 모드다)."""
+        self._writeq.put((path, samples, self._sr))
+
+    def _writer_loop(self) -> None:
+        while True:
+            item = self._writeq.get()
+            try:
+                if item is None:
+                    return
+                path, samples, sr = item
+                _write_wav(path, samples, sr)
+            except Exception as e:                 # 한 클립 실패가 세션을 죽이면 안 된다
+                print(f"[collect] 클립 저장 실패: {e}", file=sys.stderr)
+            finally:
+                self._writeq.task_done()
 
     # ── HUD 스레드 ──────────────────────────────────────────────────────
 
@@ -279,6 +307,15 @@ class SirenCollector:
                 "show_buttons": self.show_buttons,
             }
 
+    def flush(self) -> None:
+        """대기 중인 클립 저장이 디스크에 닿을 때까지 기다린다.
+
+        저장은 비동기라(파이프라인 스레드를 안 붙잡으려고) 방금 닫힌 클립의 파일이
+        아직 없을 수 있다. 세션 도중에 파일을 읽어야 하는 쪽(테스트·검사 도구)은
+        이걸 부른다. 정상 종료 경로는 close() 가 알아서 기다린다.
+        """
+        self._writeq.join()
+
     def close(self) -> Optional[str]:
         """종료 — 열린 클립을 저장하고 요약 한 줄을 돌려준다.
 
@@ -296,7 +333,12 @@ class SirenCollector:
             for r in self._rows:
                 counts[r["label"]] = counts.get(r["label"], 0) + 1
             parts = " · ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "클립 없음"
-            return f"[collect] 클립 {len(self._rows)}개 ({parts}) → {self.session}"
+        # ★ 락 밖에서 저장을 끝까지 기다린다 — 여기서 안 기다리면 데몬 워커가
+        #   프로세스와 함께 죽어 마지막 클립들이 사라진다.
+        self._writeq.join()
+        self._writeq.put(None)
+        self._writer.join(timeout=5.0)
+        return f"[collect] 클립 {len(self._rows)}개 ({parts}) → {self.session}"
 
     # ── 내부 (호출자가 락을 쥔 상태) ─────────────────────────────────────
 
@@ -360,11 +402,16 @@ class SirenCollector:
         if c is None or self._sr is None or not c["frames"]:
             return
         name = f"{len(self._rows):03d}_{c['trigger']}.wav"
-        _write_wav(self.session / "clips" / name,
-                   np.concatenate(c["frames"]), self._sr)
+        # ★ wav 쓰기는 락 밖(별도 스레드)에서 한다.
+        #   여기는 파이프라인 스레드이고 self._lock 을 쥔 상태다. 120초 클립이면
+        #   ch0+ch1 로 최대 7.6MB 를 젯슨 저장매체에 쓰는데, 그동안 HUD 의 status()
+        #   가 같은 락에서 대기해 **제품 화면이 그만큼 멈춘다**. 캡처 큐도 그만큼
+        #   밀리므로 경보가 실제 소리보다 뒤로 처진다.
+        self._enqueue_write(self.session / "clips" / name,
+                            np.concatenate(c["frames"]))
         if c["raw"]:                      # ch1 원본 — 있으면 나란히 저장
-            _write_wav(self.session / "clips_raw" / name,
-                       np.concatenate(c["raw"]), self._sr)
+            self._enqueue_write(self.session / "clips_raw" / name,
+                                np.concatenate(c["raw"]))
         self._rows.append({
             "clip": f"clips/{name}",
             "label": c["label"],

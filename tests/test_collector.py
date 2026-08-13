@@ -73,6 +73,7 @@ def test_auto_clip_includes_preroll_and_tail(tmp_path):
     assert float(r["pre_roll_sec"]) == pytest.approx(3.0)
     # 프리롤 3(트리거 청크 제외한 직전 3청크) + 사이렌 4 + 꼬리 2 = 9초
     assert float(r["duration_sec"]) == pytest.approx(9.0)
+    c.flush()                           # 저장은 비동기 — 파일을 읽으려면 기다린다
     assert _wav_sec(c.session / r["clip"]) == pytest.approx(9.0)
     assert r["det_flags"] == "111100"   # 트리거 틱부터: 사이렌 4 + 꼬리 2
 
