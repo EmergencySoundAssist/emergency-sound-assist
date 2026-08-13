@@ -135,3 +135,35 @@ def test_quiet_mode_keyboard_input_still_reaches_collector():
     d._collect_input(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_h))
     assert fake.labels == ["ambulance", "horn"]
     pygame.quit()
+
+
+def test_mic_fault_is_drawn_over_everything(monkeypatch):
+    """마이크가 죽으면 화면이 '정상'으로 보이면 안 된다.
+
+    무음 입력은 '일반 도로 소음'으로 분류되어 평상 화면이 나온다 — 이 제품 사용자는
+    소리로 확인할 수 없으므로, 못 듣고 있다는 사실 자체가 화면에 떠야 한다.
+    """
+    import hud.renderer as R
+    from audio.capture import SilenceWatch, mic_health
+
+    pygame.init()
+    surf = pygame.Surface((1280, 360))
+    r = Renderer(HudConfig(width=1280, height=360))
+
+    w = SilenceWatch()
+    mic_health.attach(w)
+    assert not R._mic_faulted()
+    for _ in range(25):                     # 연속 무음 → 고장
+        w.update(__import__("numpy").zeros(1600, dtype="float32"))
+    assert R._mic_faulted()
+
+    drawn = []
+    monkeypatch.setattr(r, "_center",
+                        lambda surface, text, *a, **k: drawn.append(text))
+    monkeypatch.setattr(r, "_draw_normal",
+                        lambda *a, **k: drawn.append("NORMAL"))
+    r.draw(surf, None)
+    assert any("마이크" in t for t in drawn), drawn
+    assert "NORMAL" not in drawn            # 평상 화면으로 덮이면 안 된다
+    mic_health.attach(None)
+    pygame.quit()

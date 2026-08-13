@@ -122,11 +122,17 @@ def iter_chunks_from_respeaker(
     print(f"[audio] 입력 장치: {label} · {num_channels}ch→ch{channel} {sample_rate}Hz",
           file=sys.stderr)
     watch = SilenceWatch()
+    mic_health.attach(watch)          # main/HUD 가 고장 상태를 읽어 갈 수 있게
     n = int(sample_rate * chunk_seconds)
     with sd.InputStream(samplerate=sample_rate, channels=num_channels,
                         dtype="float32", device=device) as stream:
         while True:
-            data, _ = stream.read(n)          # (n, num_channels)
+            data, overflowed = stream.read(n)          # (n, num_channels)
+            if overflowed:                # 버리면 샘플 유실이 조용히 지나간다 —
+                watch.overflows += 1      # 그 구간 사이렌은 그냥 사라진다
+                if watch.overflows in (1, 10, 100, 1000):
+                    print(f"[audio] 경고: 입력 overflow 누적 {watch.overflows}회 — "
+                          "샘플 유실 가능(소비자가 느림)", file=sys.stderr)
             mono = data[:, channel].copy()
             warn = watch.update(mono)
             if warn:
@@ -209,6 +215,28 @@ def _resolve_input_device(
     return None, label
 
 
+class _MicHealth:
+    """현재 캡처의 SilenceWatch 를 가리키는 자리 — HUD 가 고장을 그릴 수 있게 한다.
+
+    캡처는 제너레이터라 청크만 흘려보내고, 고장 여부는 청크에 실을 자리가 없다.
+    전역 하나를 두는 대신 배선을 뜯는 방법도 있지만, 이 값은 프로세스당 마이크가
+    하나라는 사실에 기대는 것이라 여기서는 이게 정직하다.
+    """
+
+    def __init__(self) -> None:
+        self._watch = None
+
+    def attach(self, watch) -> None:
+        self._watch = watch
+
+    @property
+    def faulted(self) -> bool:
+        return bool(self._watch is not None and self._watch.faulted)
+
+
+mic_health = _MicHealth()
+
+
 class SilenceWatch:
     """연속 '디지털 무음' 감시 — 장치 오선택(ch0 무음) 함정을 즉시 드러낸다.
 
@@ -216,13 +244,28 @@ class SilenceWatch:
     소리가 다시 들어오면 리셋돼 다음 무음 구간에서 또 한 번 경고한다.
     다채널 (n, C) 입력이면 ch0(처리채널) 기준. threshold 는 정상 환경소음 RMS
     보다 훨씬 낮게 잡아 '진짜 0에 가까운' 입력만 무음으로 본다.
+
+    ★ 경고를 stderr 에 한 번 내는 것만으로는 부족하다. 이 제품의 사용자는 화면만
+    본다(청각장애 운전자). 마이크가 죽으면 입력은 무음 → '일반 도로 소음' → 평상
+    화면이라, **안전장치가 죽은 걸 알 방법이 없다**. Airacle deploy 는 같은 상황에서
+    비정상 종료해 run.sh 가 재시작한다(infer_trt.py:342 "스테일 버퍼로 '멀쩡한 척'
+    하지 않고"). ESA 는 감독 프로세스가 없어 종료하면 그냥 꺼지므로, 대신 고장을
+    **화면에 띄운다** — faulted 가 그 상태다.
     """
 
-    def __init__(self, threshold: float = 1e-5, chunks: int = 5):
+    def __init__(self, threshold: float = 1e-5, chunks: int = 5,
+                 fault_chunks: int = 20):
         self._threshold = threshold
         self._chunks = chunks
+        self._fault_chunks = fault_chunks
         self._run = 0
         self._warned = False
+        self.overflows = 0            # PortAudio overflow 누적 (샘플 유실)
+
+    @property
+    def faulted(self) -> bool:
+        """입력이 fault_chunks 이상 연속 무음 — 마이크/USB 사망으로 본다."""
+        return self._run >= self._fault_chunks
 
     def update(self, samples: np.ndarray) -> str | None:
         x = np.asarray(samples)

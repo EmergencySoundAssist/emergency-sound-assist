@@ -42,14 +42,14 @@ class SubtypeVote:
 
     def __init__(self, labels=("구급차", "경찰차", "소방차"), win: int = 24):
         self.labels = labels
-        self.votes = deque(maxlen=win)               # 클래스 idx만 저장(기권 미저장)
+        self.votes = deque(maxlen=win)               # (클래스 idx, 확신도) 저장(기권 미저장)
         self.n_seen = 0
 
     def add(self, probs, conf: float) -> None:
         self.n_seen += 1
         i = int(probs.argmax())
         if float(probs[i]) >= conf:
-            self.votes.append(i)
+            self.votes.append((i, float(probs[i])))
 
     def winner(self) -> tuple[int | None, int, int]:
         """(다수 클래스 idx, 그 표수, 전체 유효표) — 유효표가 없으면 (None, 0, 0).
@@ -59,15 +59,26 @@ class SubtypeVote:
         """
         if not self.votes:
             return None, 0, 0
-        i, c = Counter(self.votes).most_common(1)[0]
+        i, c = Counter(v for v, _ in self.votes).most_common(1)[0]
         return i, c, len(self.votes)
+
+    def winner_conf(self) -> float | None:
+        """이긴 클래스에 던져진 표들의 **모델 확신도 평균**.
+
+        표 비율(c/n)을 확신도 자리에 넣으면 안 된다 — 같은 창이 여러 번 세어졌을 때
+        0.62 짜리 관측이 1.00 으로 보고된다. 여기서 돌려주는 건 모델이 실제로 말한 값이다.
+        """
+        i, _, _ = self.winner()
+        if i is None:
+            return None
+        cs = [c for v, c in self.votes if v == i]
+        return sum(cs) / len(cs)
 
     def label(self) -> str:
         if not self.votes:                           # 유효 투표 0 → 세분화 보류
             return f"긴급차량({self.n_seen}tick)"
-        cnt = Counter(self.votes)
-        i, c = cnt.most_common(1)[0]
-        return f"{self.labels[i]}({c}/{len(self.votes)}표)"
+        i, c, n = self.winner()
+        return f"{self.labels[i]}({c}/{n}표)"
 
     def reset(self) -> None:
         self.votes.clear()

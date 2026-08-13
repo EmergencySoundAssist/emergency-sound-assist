@@ -105,6 +105,22 @@ GATE_ON = os.environ.get("ESA_GATE", "0") not in ("0", "false", "False")
 GATE_TAU_ON = float(os.environ.get("ESA_GATE_TAU_ON", "0.4"))
 
 
+def emergency_from(res) -> bool:
+    """analyze() 결과 → 긴급인가 (게이트 **없는** 기본 경로의 판정 규칙).
+
+    5초 창 argmax 가 siren/horn 이거나, 5초 창이 noise 인데 2초 창이 horn 이면 긴급이다.
+    두 번째 항이 핵심인데, 벤치가 이걸 안 세고 있었다 — 같은 early4·같은 142 네거티브·
+    1.0초 격자에서 벤치 규칙 22클립 vs 런타임 규칙 25클립. 배포 판단의 기준선이었던
+    그 22 가 실제 동작보다 3클립 낮았다. 그래서 규칙을 여기 한 곳에 둔다.
+    """
+    if res is None:
+        return False
+    if res["label"] in (SoundClass.SIREN, SoundClass.HORN):
+        return True
+    return (res["label"] is SoundClass.NORMAL_TRAFFIC
+            and res.get("fast_label") is SoundClass.HORN)
+
+
 def gate_margins(res) -> tuple[float, float]:
     """analyze() 결과 → 게이트에 넣을 (사이렌, 경적) 마진.
 
@@ -310,7 +326,22 @@ class _OnnxClassifier:
         keep = int(WIN_S * sr_in)
         self._buf_in = np.concatenate([self._buf_in, _mono(chunk.samples)])[-keep:]
         self._buf = _resample(self._buf_in, sr_in, SR_MODEL)
-        if self._buf.size < N_FFT:               # 아직 너무 짧음
+        # ★ 창이 실제 오디오로 다 차기 전에는 판정하지 않는다.
+        #
+        # 버퍼가 짧으면 아래에서 무음(PAD_VAL=log 1e-6)으로 216프레임을 채우는데,
+        # _norm_win 이 그 계단까지 포함해 정규화하므로 실제 오디오 쪽이 통째로 과장된다.
+        # 실측(early4·게이트 off·실차 네거티브 127클립, 런타임 규칙 infer 로 셈):
+        #     t<5s  : 틱 331/508 (65.2%) 발화 · **클립 127/127**
+        #     t>=5s : 틱  65/1340 ( 4.9%) 발화 · 클립  25/127
+        # 즉 켤 때마다 반드시 한 번은 사이렌 경보와 BLE 진동이 나갔다.
+        # Airacle deploy 도 같은 이유로 막는다 — infer_trt.py `if not ring.full(): continue`.
+        #
+        # 대가: 기동 후 5초 안에 시작한 사이렌은 놓친다. 매 기동 오경보를 확실히 내는
+        # 것보다 낫다고 본다(deploy 도 같은 선택). tools/bench_runtime.py 가 t<5.0 틱을
+        # 버리는 것도 이제서야 사실과 맞는다.
+        if self._buf.size + HOP < BUF_SAMPLES:
+            return None
+        if self._buf.size < N_FFT:               # 방어: 창 하나도 못 만드는 길이
             return None
 
         m = _logmel(self._buf)[:, -N_FRAMES:]    # 최근 5초 윈도우 (미정규화)
@@ -399,9 +430,8 @@ class _OnnxClassifier:
             return ClassResult.from_label(SoundClass.NORMAL_TRAFFIC, 0.0)
         if GATE_ON:
             return self._gated(res, chunk)
-        if (res["label"] is SoundClass.NORMAL_TRAFFIC
-                and res.get("fast_label") is SoundClass.HORN):
-            return ClassResult.from_label(SoundClass.HORN, res["conf"])
+        if res["label"] is SoundClass.NORMAL_TRAFFIC and emergency_from(res):
+            return ClassResult.from_label(SoundClass.HORN, res["conf"])   # 2초 창 경적 승격
         subtype = subtype_confidence = None
         if res["label"] is SoundClass.SIREN and self._last_x is not None:
             subtype, subtype_confidence = self._infer_subtype(self._last_x)

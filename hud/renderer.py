@@ -15,6 +15,15 @@ import sys
 import pygame
 
 from core.types import Direction
+
+
+def _mic_faulted() -> bool:
+    """마이크가 죽었는가. 캡처 모듈이 없거나(테스트·오프라인) 미부착이면 False."""
+    try:
+        from audio.capture import mic_health
+    except Exception:
+        return False
+    return mic_health.faulted
 from hud import card as hud_card
 from hud.card import Layout
 
@@ -166,7 +175,14 @@ class Renderer:
         # 아래 그리기 코드는 화면이 얼마나 크든 1280×360 을 그린다고 믿으면 된다.
         target = surface.subsurface(box) if box.size != surface.get_size() else surface
         w, h = box.size
-        if view is None:
+        if _mic_faulted():
+            # ★ 안전장치가 조용히 죽는 것을 막는다. 마이크가 죽으면 입력은 무음이고
+            #   판정은 '일반 도로 소음'이라 화면이 정상으로 보인다 — 이 제품 사용자는
+            #   소리로 확인할 수 없으므로, 못 듣고 있다는 사실 자체를 띄워야 한다.
+            self._center(target, "마이크 신호 없음", self._f_mid, VEH_FIRE, w // 2, h // 2 - 24)
+            self._center(target, "경보가 동작하지 않습니다 · 연결을 확인하세요",
+                         self._f_mid, VEH_FIRE, w // 2, h // 2 + 28)
+        elif view is None:
             self._center(target, "연결됨 · 대기 중", self._f_mid, MUTED, w // 2, h // 2)
         elif view.emergency:
             self._draw_emergency(target, view, w, h)

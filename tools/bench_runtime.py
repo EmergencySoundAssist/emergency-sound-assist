@@ -103,7 +103,7 @@ def _tick_labels(y: np.ndarray, grid: float, gate=None) -> list[tuple[float, boo
         if r is None or t < WARMUP_S:
             continue
         if gate is None:
-            fire = r["label"] in (SoundClass.SIREN, SoundClass.HORN)
+            fire = CI.emergency_from(r)          # 런타임(infer)과 같은 규칙
         else:
             fire = gate.step(*CI.gate_margins(r))   # 런타임과 같은 함수
         out.append((t, fire))
@@ -198,6 +198,8 @@ def main(argv=None) -> int:
     p.add_argument("--gate", action="store_true", help="마진 게이트(pipeline.gate) 적용")
     p.add_argument("--tau-on", type=float, nargs="*", default=None,
                    help="게이트 켜기 임계 스윕 (기본: deploy 값 1.2)")
+    p.add_argument("--heldout", action="store_true",
+                   help="네거티브를 neg_heldout 으로 제한 (모델 간 공평 비교용)")
     p.add_argument("--manifest", default="/Users/swlee/PycharmProjects/Airacle/data/realroad_manifest.json")
     a = p.parse_args(argv)
 
@@ -205,7 +207,12 @@ def main(argv=None) -> int:
     rnd = random.Random(0)
     pairs = [(rnd.choice(sir), rnd.choice(noi)) for _ in range(a.n)]
     items = json.loads(Path(a.manifest).read_text(encoding="utf-8"))["items"]
-    negs = [d["wav"] for d in items if d["role"] in ("neg_train", "neg_heldout")]
+    # ★ --heldout 은 neg_heldout 만 쓴다. 채널 프로파일(realchannel)이 neg_train 으로
+    #   만들어지므로, 채널을 쓴 모델과 안 쓴 모델을 **공평하게** 비교하려면 학습 재료가
+    #   아닌 쪽에서 재야 한다. 기본(전체)은 절대값 감시용이고 모델 간 비교엔 못 쓴다.
+    roles = ("neg_heldout",) if a.heldout else ("neg_train", "neg_heldout")
+    negs = [d["wav"] for d in items if d["role"] in roles]
+    print(f"[bench] 네거티브 역할 {roles}", file=sys.stderr)
 
     print(f"[bench] 사이렌 {len(pairs)}건(AI-Hub) · 실차 네거티브 {len(negs)}클립 · "
           f"모델 {CI._MODEL_PATH.name}\n")

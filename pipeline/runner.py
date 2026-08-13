@@ -90,8 +90,13 @@ class Pipeline:
         # 수집기 det_flags 도 '1틱=1초'라 하류 도구가 그 규약에 묶여 있다.
         self._acc: list[np.ndarray] = []
         self._acc_n = 0
+        # 수집기에 넘길 **원본 다채널**도 따로 모은다. ch0 만 모으면 ReSpeaker ch1(원본
+        # 마이크)이 사라져서, '차종이 실차에서 무너지는 게 ch0 의 빔포밍/AEC 때문인가'를
+        # 영영 못 가른다 — 실제로 e2616db 이후 44클립의 ch1 이 그렇게 소실됐다.
+        self._acc_raw: list[np.ndarray] = []
         self.full_tick = False           # 이번 process() 가 1초 경계였나 (main 이 읽는다)
-        self.tick_chunk: Optional[AudioChunk] = None   # 그 1초의 오디오(수집기용)
+        self.tick_chunk: Optional[AudioChunk] = None   # 그 1초의 오디오(ch0 다운믹스)
+        self.tick_raw_chunk: Optional[AudioChunk] = None  # 그 1초의 **원본 다채널**(수집기용)
         self.tick_raw: Optional[ClassResult] = None    # 그 1초의 raw 판정(긴급 우선)
         self._tick_raw_acc: Optional[ClassResult] = None
         self._direction = DirectionResult(direction=Direction.UNKNOWN)
@@ -104,7 +109,7 @@ class Pipeline:
         # 디바운스 전 원판정도 남긴다 — 수집기(collect)는 벽시계 잔향이 섞이지 않은
         # raw 를 써야 오디오 시간축과 일관된다(--wav 재수집은 실시간보다 빠르다).
         self.last_raw = classify(mono_chunk)     # ← 매 청크(0.25초 격자)
-        cls = self._vote_subtype(self._debounce(self.last_raw))
+        cls = self._vote_subtype(self._debounce(self.last_raw), self.last_raw)
         # 1초 틱의 대표 판정: 그 안에서 **가장 먼저 나온 긴급**을 남긴다. 수집기가
         # det_flags 를 1초 단위로 적으므로, 4조각 중 하나라도 울리면 그 틱은 울린 것이다.
         if self._tick_raw_acc is None or (
@@ -114,12 +119,15 @@ class Pipeline:
 
         # 1초가 모였는지 — 무거운 모듈은 이 경계에서만 돈다
         self._acc.append(np.asarray(mono_chunk.samples))
+        self._acc_raw.append(np.asarray(chunk.samples))
         self._acc_n += mono_chunk.samples.size
         self.full_tick = self._acc_n >= int(TICK_SECONDS * sr)
         tick_chunk = None
         if self.full_tick:
             tick_chunk = AudioChunk(samples=np.concatenate(self._acc), sample_rate=sr)
-            self._acc, self._acc_n = [], 0
+            self.tick_raw_chunk = AudioChunk(
+                samples=np.concatenate(self._acc_raw, axis=0), sample_rate=sr)
+            self._acc, self._acc_n, self._acc_raw = [], 0, []
             self.tick_chunk = tick_chunk
             self.tick_raw = self._tick_raw_acc
             self._tick_raw_acc = None
@@ -178,7 +186,7 @@ class Pipeline:
     SUBTYPE_MAJORITY = 0.7
     _SUBTYPE_ORDER = (SirenSubtype.AMBULANCE, SirenSubtype.POLICE, SirenSubtype.FIRE)
 
-    def _vote_subtype(self, cls: ClassResult) -> ClassResult:
+    def _vote_subtype(self, cls: ClassResult, raw: ClassResult) -> ClassResult:
         """차종을 **시간 다수결**로 눌러 준다 — 창 하나의 추정을 그대로 그리지 않는다.
 
         왜 필요한가: 검출이 빨라지면(early3/early4) 사이렌이 아직 멀고 약할 때부터
@@ -192,16 +200,21 @@ class Pipeline:
         (화면 '긴급차량')으로 둔다. 확신 없는 차종을 이름 붙여 말하지 않는 쪽이 낫다.
         """
         if not cls.is_emergency or cls.label is not SoundClass.SIREN:
-            self._sub_vote.reset()
+            self._sub_vote.reset()               # 이벤트 종료 — 다음 사이렌에 표가 안 넘어가게
             return cls
-        if cls.subtype is not None and cls.subtype in self._SUBTYPE_ORDER:
+        # ★ 표는 **raw(실제 관측)** 에서만 받는다. 디바운스는 잔향 동안 같은 결과 객체를
+        #   계속 돌려주므로, 그걸 먹이면 창 하나가 수 표가 되어 "창 하나로 차종을 그리지
+        #   않는다"는 이 함수의 목적 자체가 무너진다(0.25초 격자면 한 창이 최대 8표).
+        if (raw.is_emergency and raw.label is SoundClass.SIREN
+                and raw.subtype in self._SUBTYPE_ORDER):
             probs = np.zeros(len(self._SUBTYPE_ORDER), dtype=np.float32)
-            probs[self._SUBTYPE_ORDER.index(cls.subtype)] = float(cls.subtype_confidence or 0.0)
+            probs[self._SUBTYPE_ORDER.index(raw.subtype)] = float(raw.subtype_confidence or 0.0)
             self._sub_vote.add(probs, SUBTYPE_CONF)
         i, c, n = self._sub_vote.winner()
         if i is None or n < self.SUBTYPE_MIN_VOTES or c < self.SUBTYPE_MAJORITY * n:
             return replace(cls, subtype=SirenSubtype.UNKNOWN, subtype_confidence=None)
-        return replace(cls, subtype=self._SUBTYPE_ORDER[i], subtype_confidence=c / n)
+        return replace(cls, subtype=self._SUBTYPE_ORDER[i],
+                       subtype_confidence=self._sub_vote.winner_conf())
 
     def _fuse(self, acoustic: ApproachResult) -> ApproachResult:
         """음량 판단에 속도방향 모델과 직접 도플러를 조건부로 얹어 motion 을 확정한다.

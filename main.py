@@ -84,7 +84,8 @@ def run_stream(chunks, stt_worker=None, hud=None, sender=None, collector=None) -
             # 0.25초 틱이 되어 하류 도구의 '1틱=1초' 규약이 깨지고, BLE 는 4배로 쏜다.
             # 오디오는 손실 없이 모아서 넘어간다(Pipeline 이 누적해 tick_chunk 로 준다).
             if collector is not None and pipe.full_tick:
-                collector.on_result(pipe.tick_chunk, pipe.tick_raw)
+                # 원본 다채널을 준다 — ch0 다운믹스를 주면 수집기가 ch1 을 못 꺼낸다.
+                collector.on_result(pipe.tick_raw_chunk or pipe.tick_chunk, pipe.tick_raw)
             if sender is not None and pipe.full_tick:
                 sender.send_fused(fused)
             if hud is not None:
