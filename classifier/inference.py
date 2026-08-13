@@ -104,6 +104,17 @@ FAST_FRAMES = 87
 GATE_ON = os.environ.get("ESA_GATE", "0") not in ("0", "false", "False")
 GATE_TAU_ON = float(os.environ.get("ESA_GATE_TAU_ON", "0.4"))
 
+# ── 예비(PRE) 경보 — 2초 창 ─────────────────────────────────────────────
+# 87프레임 모델을 매 틱 돌려 m_fast 를 내면서 **아무 데도 안 쓰고 있었다**(감사 지적).
+# deploy 는 이걸 별도 게이트에 넣어 확정(5초)보다 먼저 PRE 를 띄운다 — 사용자가 기억하는
+# "2초 단위로 먼저 뜨고 그 다음 5초 검출"이 이것이다. ESA_PRE=0 으로 끈다.
+# ⚠ 실측(AI-Hub 사이렌 25개·실내 배경, 0.25초 격자): 예비 중앙 2.25초(24/25) vs
+#   확정 중앙 1.75초(25/25) — **예비가 더 느리다**. deploy 에 PRE 가 있는 이유는
+#   deploy 의 5초 채널이 느리기 때문인데, ESA 는 같은 문제를 모델 재학습으로 풀었다
+#   (early→early4, 실차 지연 5.0→2.0초). 그래서 여기선 예비가 확정을 못 이긴다.
+#   임계를 낮추면 빨라지지만 그건 실차 네거티브 11→23/49 로 뛰던 경로다. 기본 꺼짐.
+PRE_ON = os.environ.get("ESA_PRE", "0") not in ("0", "false", "False")
+
 
 def emergency_from(res) -> bool:
     """analyze() 결과 → 긴급인가 (게이트 **없는** 기본 경로의 판정 규칙).
@@ -229,6 +240,8 @@ class _OnnxClassifier:
         self._last_x = None                  # analyze()의 정규화 5초 창 — 차종/속도가 재사용
         self._gate = None                    # 마진 게이트 (ESA_GATE=1 일 때만)
         self._gate_dt = 0.0                  # 게이트를 만든 청크 간격(초)
+        self._pre = None                     # 예비(PRE) 게이트 — 2초 창
+        self._pre_dt = 0.0
 
     def _session(self):
         if self._sess is None:
@@ -305,6 +318,8 @@ class _OnnxClassifier:
         self._last_x = None
         if self._gate is not None:
             self._gate.reset()      # 클립 경계에서 hangover 가 넘어가면 오프라인 재생이 오염된다
+        if self._pre is not None:
+            self._pre.reset()
 
     # ── 하이브리드 API — 마진 판정 + 창 재사용 (석우 infer_trt.step 방식) ──
     def analyze(self, chunk: AudioChunk):
@@ -432,6 +447,11 @@ class _OnnxClassifier:
             return self._gated(res, chunk)
         if res["label"] is SoundClass.NORMAL_TRAFFIC and emergency_from(res):
             return ClassResult.from_label(SoundClass.HORN, res["conf"])   # 2초 창 경적 승격
+        if res["label"] is SoundClass.NORMAL_TRAFFIC and self._pre_fires(res, chunk):
+            # 예비(PRE): 5초 확정이 아직 조용한데 2초 창이 사이렌이라고 강하게 말한다.
+            # 확정보다 **낮은 순위**다 — 확정이 뜨면 위 분기에서 이미 사이렌으로 나간다.
+            return ClassResult.from_label(SoundClass.SIREN, res["conf"],
+                                          subtype=SirenSubtype.UNKNOWN)
         subtype = subtype_confidence = None
         if res["label"] is SoundClass.SIREN and self._last_x is not None:
             subtype, subtype_confidence = self._infer_subtype(self._last_x)
@@ -441,6 +461,17 @@ class _OnnxClassifier:
             subtype=subtype,
             subtype_confidence=subtype_confidence,
         )
+
+    def _pre_fires(self, res, chunk: AudioChunk) -> bool:
+        """2초 창 예비 게이트. 확정(5초)이 뜨기 전에 먼저 울리는 채널."""
+        if not PRE_ON or res.get("m_fast") is None:
+            return False
+        dt = len(chunk.samples) / float(chunk.sample_rate or 1)
+        if self._pre is None or abs(dt - self._pre_dt) > 1e-6:
+            from pipeline.gate import SIREN_FAST, Gate
+            self._pre = Gate(SIREN_FAST, dt)
+            self._pre_dt = dt
+        return self._pre.step(res["m_fast"])
 
     def _gated(self, res, chunk: AudioChunk) -> ClassResult:
         """마진 게이트로 판정한다 — argmax(마진>0) 대신 켜기 어렵게·끄기 느리게.

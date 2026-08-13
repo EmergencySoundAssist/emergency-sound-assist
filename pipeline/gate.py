@@ -44,6 +44,13 @@ class GateConfig:
 SIREN = GateConfig(tau_on=1.2, tau_off=0.5, t_on=0.3, t_vote=0.75, k_frac=0.6, t_hang=2.5)
 HORN = GateConfig(tau_on=2.5, tau_off=1.0, t_on=0.3, t_vote=0.45, k_frac=0.6, t_hang=1.0)
 
+# 예비(PRE) — 2초 창 전용. deploy CFG["siren_fast"](tau_on 2.0, N_on 2, K_vote 3/M_win 5,
+# T_hang 1.0)를 초 단위로 옮긴 것. 5초 확정보다 **먼저** 뜨는 "빠른 귀"다.
+#   왜 임계가 높은가(2.0): 2초 창을 argmax 로 열면 실차 네거티브가 11 → 23/49 로 뛴다.
+#   deploy 가 이걸 견디는 이유는 창이 짧아서가 아니라 **임계·연속·투표를 같이 걸어서**다.
+#   빨리 켜고(≈2초) 빨리 접는다(hangover 1.0) — 확정 채널이 이어받으므로 길게 끌 이유가 없다.
+SIREN_FAST = GateConfig(tau_on=2.0, tau_off=0.5, t_on=0.3, t_vote=0.75, k_frac=0.6, t_hang=1.0)
+
 
 class Gate:
     """마진 시계열 → 켜짐/꺼짐. step(margin) 을 매 틱 부르고 bool 을 받는다."""

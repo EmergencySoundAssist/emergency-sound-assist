@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import replace
 from typing import Optional
@@ -182,8 +183,13 @@ class Pipeline:
 
     # 차종을 한 번이라도 이름 붙이려면 필요한 것: 유효표 최소 개수와, 그 안에서의 우세 비율.
     # 낮게 잡으면 화면이 구급차↔경찰차로 떤다(현장 신고: "핸드폰으로 사이렌 틀면 차종이 튄다").
-    SUBTYPE_MIN_VOTES = 5
-    SUBTYPE_MAJORITY = 0.7
+    # env 로 연다 — 시연 영상처럼 차종을 화면에 띄워야 하는 경우가 있다.
+    # ⚠ 기준을 낮추면 확신 없는 차종이 그대로 화면에 나간다. 실차 채널에서 이 분류기는
+    #   균형정확도 50%(= 정보 없음)이고, 확장 held-out 11클립에서 3/11(우연 33%)이었다.
+    #   "한국 긴급차량이 사이렌 모드를 공유 → 소리 단독 차종 구분은 상당 부분 ill-posed"
+    #   (Airacle 40957d8). 낮춰 쓰는 건 그걸 알고 하는 선택이어야 한다.
+    SUBTYPE_MIN_VOTES = int(os.environ.get("ESA_SUBTYPE_MIN_VOTES", "5"))
+    SUBTYPE_MAJORITY = float(os.environ.get("ESA_SUBTYPE_MAJORITY", "0.7"))
     _SUBTYPE_ORDER = (SirenSubtype.AMBULANCE, SirenSubtype.POLICE, SirenSubtype.FIRE)
 
     def _vote_subtype(self, cls: ClassResult, raw: ClassResult) -> ClassResult:
