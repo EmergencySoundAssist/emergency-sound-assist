@@ -35,6 +35,12 @@ outputs/
 *.onnx
 *.pb
 
+# 현재 런타임에서 사용하는 소형 ONNX 배포 모델은 저장소에 포함한다.
+!classifier/models/cnn_attn_full_s42.onnx
+!classifier/models/cnn_attn_full_s42_87f.onnx
+!classifier/models/subtype_cnn_attn_yt_s42.onnx
+!classifier/models/speed_neural_dir.onnx
+
 # ===== 노트북 / 캐시 =====
 .ipynb_checkpoints/
 *.log

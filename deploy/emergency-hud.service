@@ -1,0 +1,17 @@
+[Unit]
+Description=Emergency Sound Assist HUD
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=dcnm
+WorkingDirectory=/home/dcnm/emergency-sound-assist
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/dcnm/.Xauthority
+ExecStart=/home/dcnm/emergency-sound-assist/.venv/bin/python main.py --mic --channels 6 --stt --stt-model small --hud
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target
